@@ -139,6 +139,7 @@ export default function NigWriteApp() {
   const [scanContent, setScanContent] = useState('');
   const [isScanning, setIsScanning] = useState(false);
   const [scanError, setScanError] = useState('');
+  const [scanProgress, setScanProgress] = useState({ stage: '', progress: 0, message: '' });
 
   // File upload state
   const [isUploading, setIsUploading] = useState(false);
@@ -182,9 +183,11 @@ export default function NigWriteApp() {
     setIsScanning(true);
     setScanError('');
     setReportData(null);
+    setScanProgress({ stage: 'initializing', progress: 0, message: 'Starting scan...' });
 
     try {
-      const response = await fetch('/api/scan', {
+      // Step 1: POST to start scan — returns scanId immediately
+      const postResponse = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -193,17 +196,87 @@ export default function NigWriteApp() {
         }),
       });
 
-      const result = await response.json();
+      const postResult = await postResponse.json();
 
-      if (result.success) {
-        setReportData(result.data);
-        setCurrentView('report');
-      } else {
-        setScanError(result.error || 'Scan failed. Please try again.');
+      if (!postResult.success || !postResult.scanId) {
+        setScanError(postResult.error || 'Failed to start scan. Please try again.');
+        setIsScanning(false);
+        return;
       }
+
+      const scanId = postResult.scanId;
+
+      // Step 2: Poll for progress until complete, then fetch the result
+      const pollInterval = setInterval(async () => {
+        try {
+          const progressRes = await fetch(`/api/scan-progress?id=${scanId}`);
+          if (!progressRes.ok) return;
+
+          const progressText = await progressRes.text();
+          // SSE: parse the last data line
+          const lines = progressText.split('\n').filter(l => l.startsWith('data: '));
+          if (lines.length === 0) return;
+
+          const lastLine = lines[lines.length - 1].replace('data: ', '');
+          const progress = JSON.parse(lastLine);
+
+          setScanProgress({
+            stage: progress.stage,
+            progress: progress.progress,
+            message: progress.message,
+          });
+
+          if (progress.stage === 'complete') {
+            clearInterval(pollInterval);
+
+            // Step 3: Fetch the completed scan result
+            const maxRetries = 10;
+            for (let attempt = 0; attempt < maxRetries; attempt++) {
+              try {
+                const resultRes = await fetch(`/api/scan?id=${scanId}`);
+                const result = await resultRes.json();
+
+                if (result.success && result.data) {
+                  setReportData(result.data);
+                  setCurrentView('report');
+                  setIsScanning(false);
+                  return;
+                }
+
+                if (result.stillProcessing) {
+                  // Still processing — wait and retry
+                  await new Promise(r => setTimeout(r, 1000));
+                  continue;
+                }
+
+                // Failed
+                setScanError(result.error || 'Scan completed but no result found. Please try again.');
+                setIsScanning(false);
+                return;
+              } catch {
+                await new Promise(r => setTimeout(r, 1000));
+              }
+            }
+
+            setScanError('Scan timed out. Please try again.');
+            setIsScanning(false);
+          }
+        } catch {
+          // Poll error — keep trying
+        }
+      }, 500);
+
+      // Safety timeout: stop polling after 3 minutes
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        if (isScanning) {
+          setScanError('Scan timed out. Please try again.');
+          setIsScanning(false);
+        }
+      }, 180000);
+
     } catch {
       setScanError('Network error. Please check your connection and try again.');
-    } finally {
       setIsScanning(false);
     }
   }, [scanTitle, scanContent]);
@@ -312,30 +385,86 @@ export default function NigWriteApp() {
     for (const file of filesToScan) {
       // Mark as scanning
       setBatchFiles(prev =>
-        prev.map(f => f.id === file.id ? { ...f, status: 'scanning', progress: 30 } : f)
+        prev.map(f => f.id === file.id ? { ...f, status: 'scanning', progress: 10 } : f)
       );
 
       try {
-        // Simulate progress
-        setBatchFiles(prev =>
-          prev.map(f => f.id === file.id ? { ...f, progress: 60 } : f)
-        );
-
-        const response = await fetch('/api/scan', {
+        // Step 1: POST to start scan
+        const postRes = await fetch('/api/scan', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: file.title,
-            content: file.content,
-          }),
+          body: JSON.stringify({ title: file.title, content: file.content }),
         });
 
-        const result = await response.json();
+        const postResult = await postRes.json();
+
+        if (!postResult.success || !postResult.scanId) {
+          setBatchFiles(prev =>
+            prev.map(f => f.id === file.id
+              ? { ...f, status: 'error', error: postResult.error || 'Failed to start scan' }
+              : f)
+          );
+          continue;
+        }
+
+        const scanId = postResult.scanId;
         setBatchFiles(prev =>
-          prev.map(f => f.id === file.id ? { ...f, progress: 90 } : f)
+          prev.map(f => f.id === file.id ? { ...f, progress: 30 } : f)
         );
 
-        if (result.success) {
+        // Step 2: Poll for progress
+        const result = await new Promise<{ success: boolean; data?: unknown; error?: string }>((resolve) => {
+          const poll = setInterval(async () => {
+            try {
+              const progressRes = await fetch(`/api/scan-progress?id=${scanId}`);
+              if (!progressRes.ok) return;
+              const text = await progressRes.text();
+              const lines = text.split('\n').filter(l => l.startsWith('data: '));
+              if (lines.length === 0) return;
+
+              const lastLine = lines[lines.length - 1].replace('data: ', '');
+              const progress = JSON.parse(lastLine);
+
+              // Update batch file progress
+              const pct = progress.progress;
+              setBatchFiles(prev =>
+                prev.map(f => f.id === file.id ? { ...f, progress: Math.max(pct, 30) } : f)
+              );
+
+              if (progress.stage === 'complete') {
+                clearInterval(poll);
+
+                // Fetch result
+                for (let retry = 0; retry < 10; retry++) {
+                  try {
+                    const res = await fetch(`/api/scan?id=${scanId}`);
+                    const data = await res.json();
+                    if (data.success && data.data) {
+                      resolve({ success: true, data: data.data });
+                      return;
+                    }
+                    if (data.stillProcessing) {
+                      await new Promise(r => setTimeout(r, 1000));
+                      continue;
+                    }
+                    resolve({ success: false, error: data.error || 'Scan failed' });
+                    return;
+                  } catch { await new Promise(r => setTimeout(r, 1000)); }
+                }
+                resolve({ success: false, error: 'Scan timed out' });
+              }
+            } catch { /* keep polling */ }
+          }, 500);
+
+          // Safety timeout
+          setTimeout(() => {
+            clearInterval(poll);
+            resolve({ success: false, error: 'Timed out' });
+          }, 180000);
+        });
+
+        if (result.success && result.data) {
+          const d = result.data as { plagiarism: { similarityScore: number }; aiDetection: { aiProbability: number }; reportId: string };
           setBatchFiles(prev =>
             prev.map(f =>
               f.id === file.id
@@ -343,9 +472,9 @@ export default function NigWriteApp() {
                     ...f,
                     status: 'done',
                     progress: 100,
-                    similarityScore: result.data.plagiarism.similarityScore,
-                    aiScore: result.data.aiDetection.aiProbability,
-                    reportId: result.data.reportId,
+                    similarityScore: d.plagiarism.similarityScore,
+                    aiScore: d.aiDetection.aiProbability,
+                    reportId: d.reportId,
                   }
                 : f
             )
@@ -837,6 +966,21 @@ export default function NigWriteApp() {
               </div>
             </div>
 
+            {isScanning && scanProgress.progress > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium text-[#008751]">{scanProgress.message}</span>
+                  <span className="text-muted-foreground">{scanProgress.progress}%</span>
+                </div>
+                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 overflow-hidden">
+                  <div
+                    className="bg-gradient-to-r from-[#008751] to-[#00a86b] h-full rounded-full transition-all duration-300 ease-out"
+                    style={{ width: `${scanProgress.progress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
             {scanError && (
               <div className="p-3 rounded-lg bg-red-50 border border-red-200">
                 <p className="text-sm text-red-700">{scanError}</p>
@@ -853,7 +997,7 @@ export default function NigWriteApp() {
                 {isScanning ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Analyzing Document...
+                    {scanProgress.message || 'Analyzing Document...'}
                   </>
                 ) : (
                   <>
