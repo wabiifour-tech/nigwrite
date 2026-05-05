@@ -64,6 +64,28 @@ import {
 // ──────────────────────────────────────────────
 // Types
 // ──────────────────────────────────────────────
+interface MatchRegionData {
+  startWordIndex: number;
+  endWordIndex: number;
+  text: string;
+  sourceId: string;
+  sourceTitle: string;
+  sourceType: 'internet' | 'publication' | 'student_paper';
+  sourceUrl?: string;
+  wordCount: number;
+}
+
+interface SourceBreakdownData {
+  sourceId: string;
+  sourceTitle: string;
+  sourceType: 'internet' | 'publication' | 'student_paper';
+  sourceUrl?: string;
+  matchCount: number;
+  matchedWords: number;
+  percentageOfDocument: number;
+  regions: MatchRegionData[];
+}
+
 interface ScanReportData {
   reportId: string;
   documentId: string;
@@ -71,10 +93,16 @@ interface ScanReportData {
   createdAt: string;
   plagiarism: {
     similarityScore: number;
+    totalWords: number;
+    matchedWords: number;
+    excludedWords: number;
     totalFingerprints: number;
     matchingFingerprints: number;
     flaggedSegments: string[];
     matches: { text: string; sourceTitle: string; sourceUrl?: string; contribution: number }[];
+    webSourcesSearched?: number;
+    sourceBreakdown?: SourceBreakdownData[];
+    matchRegions?: MatchRegionData[];
   };
   aiDetection: {
     aiProbability: number;

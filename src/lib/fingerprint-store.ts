@@ -10,13 +10,14 @@
 
 import { WinnowingEngine } from './winnowing-engine';
 
-interface FingerprintEntry {
+export interface FingerprintEntry {
   hash: number;
   documentId: string;
   position: number;
   ngram: string;
   sourceTitle: string;
   sourceUrl?: string;
+  sourceType: 'internet' | 'publication' | 'student_paper';
 }
 
 class FingerprintStore {
@@ -432,6 +433,100 @@ class FingerprintStore {
         ngram: fp.ngram,
         sourceTitle: doc.title,
         sourceUrl: doc.url,
+        sourceType: doc.url.includes('doi.org') ? 'publication' as const : 'internet' as const,
+      }));
+      this.indexFingerprints(entries);
+    }
+
+    // ── Student Papers Corpus (15 papers) ──
+    const studentPapers: { id: string; title: string; content: string }[] = [
+      {
+        id: "student-001",
+        title: "The Impact of Artificial Intelligence on Modern Society",
+        content: "Artificial intelligence has rapidly transformed modern society in ways that were previously unimaginable. From healthcare to transportation, education to entertainment, AI systems are now embedded in virtually every aspect of daily life. Machine learning algorithms power recommendation engines on streaming platforms, natural language processing enables virtual assistants to understand and respond to human speech, and computer vision technology allows autonomous vehicles to navigate complex road environments. The impact of artificial intelligence extends beyond convenience and efficiency, raising fundamental questions about employment, privacy, and the nature of human creativity. As AI continues to evolve, society must grapple with the ethical implications of delegating increasingly complex decisions to machines, from criminal sentencing algorithms to medical diagnosis systems.",
+      },
+      {
+        id: "student-002",
+        title: "Climate Change Solutions for Developing Nations",
+        content: "Climate change poses an existential threat to developing nations that have contributed the least to global greenhouse gas emissions. These countries face a disproportionate burden from rising temperatures, changing precipitation patterns, and increasing frequency of extreme weather events. Solutions for developing nations must be tailored to their unique socioeconomic circumstances and resource constraints. Renewable energy technologies such as solar photovoltaic panels and small-scale wind turbines offer viable alternatives to fossil fuel dependence. Climate adaptation strategies including drought-resistant crop varieties, improved water management systems, and early warning systems for natural disasters are essential for building resilience. International climate finance mechanisms and technology transfer programs play a critical role in enabling developing nations to transition to sustainable development pathways while addressing immediate adaptation needs.",
+      },
+      {
+        id: "student-003",
+        title: "Mental Health Stigma in African Communities",
+        content: "Mental health stigma remains one of the most significant barriers to accessing mental healthcare in African communities. Cultural beliefs, religious interpretations, and limited mental health literacy contribute to widespread misunderstanding of mental health conditions. Many individuals experiencing depression, anxiety, or other mental health disorders face discrimination and social exclusion rather than receiving compassionate care and support. Traditional healing practices, while culturally significant, may delay or prevent individuals from seeking evidence-based psychiatric treatment. The shortage of trained mental health professionals across the African continent further exacerbates the treatment gap, with some countries having fewer than one psychiatrist per million people. Community-based mental health education programs that integrate cultural sensitivity with scientific evidence offer promising approaches to reducing stigma and improving mental health outcomes in African populations.",
+      },
+      {
+        id: "student-004",
+        title: "The Role of Blockchain in Financial Inclusion",
+        content: "Blockchain technology has emerged as a powerful tool for promoting financial inclusion among underserved populations worldwide. Decentralized finance platforms built on blockchain networks enable individuals without access to traditional banking services to participate in financial activities including lending, borrowing, saving, and investing. In regions where banking infrastructure is limited or unreliable, blockchain-based mobile payment solutions provide secure and efficient transaction capabilities. Smart contracts automate financial agreements without the need for intermediaries, reducing transaction costs and increasing the speed of financial operations. Digital identity verification systems built on blockchain technology allow previously undocumented individuals to establish verifiable identity credentials, opening access to a range of financial services. Despite these promising applications, challenges related to regulatory uncertainty, technological literacy, and network connectivity must be addressed to realize the full potential of blockchain for financial inclusion.",
+      },
+      {
+        id: "student-005",
+        title: "Cybersecurity Challenges in the Age of Remote Work",
+        content: "The rapid shift to remote work has created unprecedented cybersecurity challenges for organizations of all sizes. With employees accessing corporate networks from personal devices and home internet connections, the traditional security perimeter has dissolved, requiring organizations to adopt zero-trust security architectures. Phishing attacks targeting remote workers have increased dramatically, exploiting the reduced security awareness and increased reliance on digital communication channels. Endpoint security has become critical as laptops, tablets, and smartphones outside the corporate network represent vulnerable targets for cybercriminals. Virtual private networks, multi-factor authentication, and endpoint detection and response solutions form the foundation of remote work security strategies. Organizations must also address the human factor through comprehensive cybersecurity awareness training programs that educate remote employees about emerging threats and best practices for maintaining security in distributed work environments.",
+      },
+      {
+        id: "student-006",
+        title: "Sustainable Urban Development in Sub-Saharan Africa",
+        content: "Sub-Saharan Africa is experiencing the most rapid urbanization in the world, with urban populations projected to double by 2050. Sustainable urban development in this region requires innovative approaches that address the interconnected challenges of housing, transportation, water supply, sanitation, and energy access. Informal settlements that house millions of urban residents must be upgraded through participatory planning processes that involve communities in designing solutions tailored to their specific needs. Transit-oriented development that integrates affordable housing with public transportation infrastructure offers a model for creating livable and connected cities. Green building technologies and renewable energy systems can reduce the environmental footprint of urban expansion while improving quality of life for residents. Decentralized governance structures that empower local communities to participate in urban planning decisions are essential for ensuring that development is both sustainable and equitable.",
+      },
+      {
+        id: "student-007",
+        title: "The Ethics of Artificial Intelligence in Healthcare",
+        content: "The integration of artificial intelligence into healthcare delivery raises profound ethical questions that must be carefully addressed to ensure equitable and just outcomes. AI-powered diagnostic systems have demonstrated remarkable accuracy in detecting diseases from medical imaging, pathology slides, and patient records, sometimes surpassing the performance of human specialists. However, these systems are only as reliable as the data on which they are trained, and biased training datasets can perpetuate or amplify existing healthcare disparities along racial, socioeconomic, and geographic lines. The opacity of many machine learning models creates challenges for informed consent, as patients may not understand how AI systems contribute to their diagnosis or treatment recommendations. Questions of accountability arise when AI systems make errors, particularly in high-stakes medical decisions. A robust ethical framework for AI in healthcare must prioritize transparency, fairness, accountability, and the preservation of human oversight in clinical decision-making.",
+      },
+      {
+        id: "student-008",
+        title: "E-Learning Effectiveness in Nigerian Higher Education",
+        content: "The effectiveness of e-learning in Nigerian higher education institutions has become a topic of increasing importance following the disruptions caused by the COVID-19 pandemic. While e-learning platforms offer significant potential for expanding access to quality education, their implementation in Nigeria faces substantial challenges including inadequate internet infrastructure, unreliable electricity supply, and limited digital literacy among both students and faculty members. Learning management systems such as Moodle and Canvas have been adopted by many Nigerian universities, but the quality of online instruction varies widely depending on the level of faculty training and institutional support. Studies comparing student performance in online versus traditional classroom settings have produced mixed results, suggesting that the effectiveness of e-learning depends heavily on instructional design, learner engagement strategies, and the availability of interactive learning resources. Hybrid models that combine online and face-to-face instruction may offer the most promising approach for Nigerian higher education institutions seeking to leverage the benefits of digital learning while maintaining the interpersonal connections that are central to effective education.",
+      },
+      {
+        id: "student-009",
+        title: "Digital Divide and Educational Inequality",
+        content: "The digital divide represents one of the most significant barriers to educational equity in the twenty-first century. Students from low-income families, rural communities, and developing countries often lack access to the digital devices, reliable internet connectivity, and technical support necessary to participate fully in digital learning environments. This digital exclusion exacerbates existing educational inequalities, creating a cycle of disadvantage that limits opportunities for social mobility and economic advancement. The COVID-19 pandemic dramatically highlighted these disparities as schools worldwide transitioned to online learning, leaving millions of students without meaningful educational alternatives. Closing the digital divide requires coordinated investment in broadband infrastructure, provision of affordable computing devices, and development of digital literacy programs that empower students and educators to leverage technology effectively. Public-private partnerships between governments, technology companies, and educational institutions offer a pathway to making digital learning accessible to all students regardless of their socioeconomic background or geographic location.",
+      },
+      {
+        id: "student-010",
+        title: "Impact of Social Media on Youth Mental Health",
+        content: "Social media platforms have become deeply integrated into the daily lives of young people, raising significant concerns about their impact on mental health and psychological well-being. Research has identified associations between heavy social media use and increased rates of anxiety, depression, loneliness, and poor body image among adolescents and young adults. The curated nature of social media content creates unrealistic comparisons, as users are constantly exposed to idealized representations of peers' lives, appearances, and achievements. Cyberbullying and online harassment represent serious threats to youth mental health, with digital platforms providing new avenues for peer victimization that extend beyond the traditional school environment. Sleep disruption caused by late-night screen time and the compulsive need to check notifications further compromise mental health outcomes. Strategies for promoting healthy social media use include digital literacy education, parental guidance on age-appropriate platform use, and the development of platform features that prioritize user well-being over engagement metrics.",
+      },
+      {
+        id: "student-011",
+        title: "Renewable Energy Adoption in West Africa",
+        content: "West Africa possesses enormous renewable energy potential that remains largely untapped despite the region's growing energy demands. Solar irradiance levels across the Sahel and savanna zones are among the highest in the world, making solar photovoltaic technology a particularly attractive option for electricity generation. Offshore and onshore wind resources in countries such as Senegal, Ghana, and Nigeria offer additional renewable energy capacity. Small-scale hydropower systems along the region's numerous river systems can provide reliable electricity to rural communities that are unlikely to be connected to national grids in the near future. The economic case for renewable energy in West Africa has strengthened considerably as the cost of solar panels and wind turbines has declined dramatically over the past decade. However, barriers to renewable energy adoption remain, including limited access to financing, inadequate regulatory frameworks, and the need for grid modernization to accommodate variable renewable energy sources.",
+      },
+      {
+        id: "student-012",
+        title: "Data Privacy in the Era of Big Data Analytics",
+        content: "The proliferation of big data analytics has fundamentally transformed how organizations collect, process, and utilize personal information, creating urgent challenges for data privacy protection. Machine learning algorithms can infer sensitive personal attributes including health conditions, political preferences, and sexual orientation from seemingly innocuous data points, raising concerns about function creep and the potential for discrimination. The commodification of personal data has created a vast data economy in which individual users often have limited awareness or control over how their information is collected, shared, and monetized. Regulatory frameworks such as the General Data Protection Regulation in Europe and the California Consumer Privacy Act in the United States represent important steps toward establishing data protection standards, but enforcement remains challenging in a borderless digital environment. Privacy-enhancing technologies including differential privacy, federated learning, and homomorphic encryption offer technical approaches to enabling data analytics while preserving individual privacy, but their widespread adoption requires balancing innovation with protection in ways that are both effective and practically implementable.",
+      },
+      {
+        id: "student-013",
+        title: "Agricultural Technology and Food Security in Africa",
+        content: "Agricultural technology innovations hold immense promise for addressing food security challenges across the African continent. Precision agriculture techniques that leverage satellite imagery, drone technology, and soil sensors enable farmers to optimize crop yields while minimizing the use of water, fertilizers, and pesticides. Mobile-based agricultural advisory services provide smallholder farmers with real-time information about weather forecasts, market prices, and best farming practices, bridging knowledge gaps that have historically limited agricultural productivity. Biotechnology advances including drought-resistant and pest-resistant crop varieties offer solutions to the challenges posed by climate change and growing pest pressures. Post-harvest loss reduction technologies including improved storage facilities, solar-powered cold chain systems, and food processing equipment help ensure that harvested crops reach consumers in edible condition. The successful adoption of agricultural technologies in Africa requires investment in rural infrastructure, extension services, and farmer training programs that build local capacity for sustainable agricultural intensification.",
+      },
+      {
+        id: "student-014",
+        title: "The Future of Work: Automation and Employment in Developing Countries",
+        content: "Automation and artificial intelligence are reshaping the global labor market in ways that have profound implications for developing countries. While automation has the potential to increase productivity and create new types of employment, it also threatens to displace large numbers of workers in industries that have traditionally served as engines of economic development, including manufacturing, agriculture, and business process outsourcing. Developing countries that have relied on low-cost labor as a competitive advantage face the risk of premature deindustrialization as advanced manufacturing technologies reduce the need for labor-intensive production. The gig economy, facilitated by digital platforms, offers new income-generating opportunities but often without the protections and benefits associated with formal employment. Preparing the workforce of developing countries for the future of work requires significant investments in education and vocational training systems that equip workers with the skills needed to thrive in an increasingly automated economy, with emphasis on digital literacy, critical thinking, creativity, and adaptability.",
+      },
+      {
+        id: "student-015",
+        title: "Gender Disparities in STEM Education and Careers",
+        content: "Gender disparities in science, technology, engineering, and mathematics fields persist as a significant challenge for achieving both equity and economic competitiveness. From an early age, societal stereotypes and implicit biases discourage girls from pursuing STEM subjects, resulting in declining female participation in advanced mathematics and science courses throughout secondary and tertiary education. Women who do enter STEM careers face additional obstacles including wage gaps compared to male counterparts, limited access to mentorship and professional networks, and workplace cultures that can be unwelcoming or hostile. The underrepresentation of women in STEM fields represents not only a social justice concern but also an economic inefficiency, as diverse teams have been shown to produce more innovative and effective solutions to complex problems. Interventions that have demonstrated effectiveness in reducing gender disparities include targeted scholarship programs, female role models and mentorship initiatives, curriculum reforms that highlight contributions of women scientists, and organizational policies that support work-life balance and address unconscious bias in hiring and promotion processes.",
+      },
+    ];
+
+    for (const paper of studentPapers) {
+      const fingerprints = engine.generateFingerprints(paper.content);
+      const entries: FingerprintEntry[] = fingerprints.map(fp => ({
+        hash: fp.hash,
+        documentId: paper.id,
+        position: fp.position,
+        ngram: fp.ngram,
+        sourceTitle: paper.title,
+        sourceUrl: undefined,
+        sourceType: 'student_paper',
       }));
       this.indexFingerprints(entries);
     }
@@ -448,4 +543,4 @@ export function getFingerprintStore(): FingerprintStore {
   return instance;
 }
 
-export type { FingerprintEntry };
+// FingerprintEntry is already exported via `export interface`

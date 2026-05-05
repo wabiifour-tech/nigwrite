@@ -4,14 +4,14 @@
  * Created by: Wabi The Tech Nurse
  *
  * Accepts a document text, runs it through the Winnowing Engine
- * for plagiarism detection, AI detection, optional web search,
- * and returns a complete scan report synchronously.
+ * for plagiarism detection (Turnitin-style word-based scoring),
+ * AI detection, optional web search, and returns a complete scan report.
  *
  * GET /api/scan — Returns scan history
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { WinnowingEngine } from '@/lib/winnowing-engine';
+import { WinnowingEngine, type CorpusMatchEntry } from '@/lib/winnowing-engine';
 import { AIDetector } from '@/lib/ai-detector';
 import { getFingerprintStore, type FingerprintEntry } from '@/lib/fingerprint-store';
 import { db } from '@/lib/db';
@@ -72,84 +72,105 @@ async function searchWebForMatches(text: string): Promise<{
 }
 
 /**
+ * Convert FingerprintEntry[] to CorpusMatchEntry[] for the engine.
+ */
+function toCorpusMatchEntries(entries: FingerprintEntry[]): CorpusMatchEntry[] {
+  return entries.map(e => ({
+    documentId: e.documentId,
+    ngram: e.ngram,
+    sourceTitle: e.sourceTitle,
+    sourceUrl: e.sourceUrl,
+    sourceType: e.sourceType,
+    position: e.position,
+  }));
+}
+
+/**
  * The main scan pipeline — runs synchronously and returns the full report.
+ * Uses Turnitin-style word-based scoring with quote/bibliography exclusion.
  */
 async function runScanPipeline(title: string, content: string, userId?: string) {
   const winnowing = new WinnowingEngine();
   const aiDetector = new AIDetector();
   const store = getFingerprintStore();
 
-  // ── Stage 1: Fingerprinting ──
-  const fingerprints = winnowing.generateFingerprints(content);
+  // ── Stage 1: Exclude quotes and bibliography ──
+  const { cleanedText, excludedWordCount } = winnowing.excludeQuotesAndBibliography(content);
 
-  // ── Stage 2: Local Corpus Matching ──
-  const corpusMatches = store.search(fingerprints.map(fp => fp.hash));
-  const scanResult = winnowing.matchDocument(content, corpusMatches);
+  // ── Stage 2: Fingerprint the cleaned text ──
+  const fingerprints = winnowing.generateFingerprints(cleanedText);
 
-  // ── Stage 3: Web Search (optional, for documents >100 words) ──
-  let webMatches: { text: string; sourceTitle: string; sourceUrl: string }[] = [];
+  // ── Stage 3: Local Corpus Matching ──
+  const corpusMatchMap = store.search(fingerprints.map(fp => fp.hash));
+
+  // Convert to CorpusMatchEntry format
+  const corpusMatches = new Map<number, CorpusMatchEntry[]>();
+  for (const [hash, entries] of corpusMatchMap) {
+    corpusMatches.set(hash, toCorpusMatchEntries(entries));
+  }
+
+  const scanResult = winnowing.matchDocument(cleanedText, corpusMatches, excludedWordCount);
+
+  // ── Stage 4: Web Search (optional, for documents >100 words) ──
+  let webSourcesSearched = 0;
   const wordCount = content.split(/\s+/).filter(w => w.length > 0).length;
 
   if (wordCount > 100) {
     try {
-      webMatches = await searchWebForMatches(content);
+      const webMatches = await searchWebForMatches(content);
+      webSourcesSearched = webMatches.length;
 
       if (webMatches.length > 0) {
-        const webFingerprintMatches = new Map<number, FingerprintEntry[]>();
+        // Build web fingerprint entries
+        const webFingerprintEntries = new Map<number, CorpusMatchEntry[]>();
         for (const wm of webMatches) {
           const webFingerprints = winnowing.generateFingerprints(wm.text);
           for (const fp of webFingerprints) {
-            const existing = webFingerprintMatches.get(fp.hash) || [];
+            const existing = webFingerprintEntries.get(fp.hash) || [];
             existing.push({
-              hash: fp.hash,
               documentId: `web-${wm.sourceUrl}`,
-              position: fp.position,
               ngram: fp.ngram,
               sourceTitle: wm.sourceTitle,
               sourceUrl: wm.sourceUrl,
+              sourceType: 'internet' as const,
+              position: fp.position,
             });
-            webFingerprintMatches.set(fp.hash, existing);
+            webFingerprintEntries.set(fp.hash, existing);
           }
         }
 
-        // Re-run match with combined corpus
-        const combinedMatches = new Map(corpusMatches);
-        for (const [hash, entries] of webFingerprintMatches) {
+        // Combine corpus + web matches
+        const combinedMatches = new Map<number, CorpusMatchEntry[]>();
+        for (const [hash, entries] of corpusMatches) {
+          combinedMatches.set(hash, [...entries]);
+        }
+        for (const [hash, entries] of webFingerprintEntries) {
           const existing = combinedMatches.get(hash) || [];
           existing.push(...entries);
           combinedMatches.set(hash, existing);
         }
 
-        const combinedResult = winnowing.matchDocument(content, combinedMatches);
-        const existingSourceIds = new Set(scanResult.matches.map(m => m.sourceTitle));
-        for (const match of combinedResult.matches) {
-          if (!existingSourceIds.has(match.sourceTitle) && match.sourceUrl) {
-            scanResult.matches.push(match);
-          }
-        }
+        // Re-run match with combined corpus
+        const combinedResult = winnowing.matchDocument(cleanedText, combinedMatches, excludedWordCount);
 
-        const allFingerprints = winnowing.generateFingerprints(content);
-        let totalMatchCount = 0;
-        for (const fp of allFingerprints) {
-          if (corpusMatches.has(fp.hash) || webFingerprintMatches.has(fp.hash)) {
-            totalMatchCount++;
-          }
-        }
-        const combinedSimilarity = Math.round(
-          (totalMatchCount / Math.max(allFingerprints.length, 1)) * 100
-        );
-        scanResult.overallSimilarity = Math.min(Math.max(scanResult.overallSimilarity, combinedSimilarity), 100);
+        // Use the combined result
+        scanResult.overallSimilarity = combinedResult.overallSimilarity;
+        scanResult.matchedWords = combinedResult.matchedWords;
+        scanResult.sourceBreakdown = combinedResult.sourceBreakdown;
+        scanResult.matchRegions = combinedResult.matchRegions;
+        scanResult.flaggedSegments = combinedResult.flaggedSegments;
+        scanResult.matches = combinedResult.matches;
       }
     } catch {
       // Web search unavailable — continue with local corpus only
     }
   }
 
-  // ── Stage 4: AI Detection ──
+  // ── Stage 5: AI Detection ──
   const aiResult = aiDetector.analyzeText(content);
   const aiSentences = aiDetector.analyzeBySentence(content);
 
-  // ── Stage 5: Save to Database ──
+  // ── Stage 6: Save to Database ──
   const document = await db.document.create({
     data: {
       title: title || 'Untitled Document',
@@ -200,15 +221,47 @@ async function runScanPipeline(title: string, content: string, userId?: string) 
     createdAt: document.createdAt,
     plagiarism: {
       similarityScore: scanResult.overallSimilarity,
+      totalWords: scanResult.totalWords,
+      matchedWords: scanResult.matchedWords,
+      excludedWords: scanResult.excludedWords,
       totalFingerprints: fingerprints.length,
       matchingFingerprints: scanResult.matches.length,
       flaggedSegments: scanResult.flaggedSegments,
-      webSourcesSearched: webMatches.length,
+      webSourcesSearched,
       matches: scanResult.matches.map(m => ({
         text: m.text,
         sourceTitle: m.sourceTitle,
         sourceUrl: m.sourceUrl,
         contribution: m.similarityContribution,
+      })),
+      sourceBreakdown: scanResult.sourceBreakdown.map(sb => ({
+        sourceId: sb.sourceId,
+        sourceTitle: sb.sourceTitle,
+        sourceType: sb.sourceType,
+        sourceUrl: sb.sourceUrl,
+        matchCount: sb.matchCount,
+        matchedWords: sb.matchedWords,
+        percentageOfDocument: sb.percentageOfDocument,
+        regions: sb.regions.map(r => ({
+          startWordIndex: r.startWordIndex,
+          endWordIndex: r.endWordIndex,
+          text: r.text,
+          sourceId: r.sourceId,
+          sourceTitle: r.sourceTitle,
+          sourceType: r.sourceType,
+          sourceUrl: r.sourceUrl,
+          wordCount: r.wordCount,
+        })),
+      })),
+      matchRegions: scanResult.matchRegions.map(r => ({
+        startWordIndex: r.startWordIndex,
+        endWordIndex: r.endWordIndex,
+        text: r.text,
+        sourceId: r.sourceId,
+        sourceTitle: r.sourceTitle,
+        sourceType: r.sourceType,
+        sourceUrl: r.sourceUrl,
+        wordCount: r.wordCount,
       })),
     },
     aiDetection: {
