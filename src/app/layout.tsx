@@ -84,7 +84,7 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="NigWrite" />
-        <meta name="theme-color" content="#006B3F" />
+        <meta name="theme-color" content="#008751" />
         <meta name="description" content="NigWrite — Detect plagiarism, identify AI content, and rewrite flagged sections. By Wabi The Tech Nurse." />
       </head>
       <body
