@@ -1,19 +1,20 @@
 /**
- * NigWrite - Plagiarism Report Component (Turnitin-style)
+ * NigWrite - Plagiarism Report Component (Turnitin-style Originality Report)
  * Created by: Wabi The Tech Nurse
  *
  * Displays the full plagiarism report with Turnitin-style originality report:
- * - Top banner with similarity score + progress bar
- * - AI score gauge
- * - Document viewer with inline highlighted match regions
- * - Source panel grouped by type (Internet, Publications, Student Papers)
+ * - Header with document title, date, verdict badge
+ * - Two score circles (Similarity Index + AI Detection)
+ * - Stacked source type breakdown bar
+ * - Document viewer with inline highlighted match regions, line numbers, source filter toolbar
+ * - Source panel with clickable sources (grouped by type, collapsible)
  * - "Fix This" rewrite buttons for flagged segments
  * - AI detection per-sentence analysis
  */
 
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   AlertTriangle,
   ExternalLink,
@@ -30,6 +31,13 @@ import {
   FileText,
   ShieldCheck,
   Ban,
+  Star,
+  Filter,
+  Settings2,
+  Eye,
+  Info,
+  Download,
+  Loader2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -56,6 +64,7 @@ interface MatchRegion {
   sourceType: 'internet' | 'publication' | 'student_paper';
   sourceUrl?: string;
   wordCount: number;
+  isPrimary?: boolean;
 }
 
 interface SourceBreakdown {
@@ -66,6 +75,7 @@ interface SourceBreakdown {
   matchCount: number;
   matchedWords: number;
   percentageOfDocument: number;
+  isPrimary?: boolean;
   regions: MatchRegion[];
 }
 
@@ -103,6 +113,20 @@ interface Verdict {
   color: string;
 }
 
+interface SourceTypeBreakdown {
+  internet: { matchedWords: number; percentage: number; sourceCount: number };
+  publications: { matchedWords: number; percentage: number; sourceCount: number };
+  studentPapers: { matchedWords: number; percentage: number; sourceCount: number };
+  primarySources: { matchedWords: number; percentage: number; sourceCount: number };
+}
+
+interface PrimarySource {
+  sourceId: string;
+  sourceTitle: string;
+  matchedWords: number;
+  percentage: number;
+}
+
 interface ReportData {
   reportId: string;
   documentId: string;
@@ -120,6 +144,8 @@ interface ReportData {
     webSourcesSearched?: number;
     sourceBreakdown?: SourceBreakdown[];
     matchRegions?: MatchRegion[];
+    sourceTypeBreakdown?: SourceTypeBreakdown;
+    primarySources?: PrimarySource[];
   };
   aiDetection: AIDetectionData;
   verdict: Verdict;
@@ -143,7 +169,7 @@ interface SegmentRewriteState {
 }
 
 // ──────────────────────────────────────────────
-// Color Palette for Sources (20 distinct colors)
+// Color Palette for Sources (Turnitin-style)
 // ──────────────────────────────────────────────
 
 const SOURCE_COLORS = [
@@ -154,13 +180,30 @@ const SOURCE_COLORS = [
 ];
 
 function getSourceColor(sourceId: string): string {
-  // Generate a stable color index from sourceId
   let hash = 0;
   for (let i = 0; i < sourceId.length; i++) {
     hash = sourceId.charCodeAt(i) + ((hash << 5) - hash);
   }
   return SOURCE_COLORS[Math.abs(hash) % SOURCE_COLORS.length];
 }
+
+// ──────────────────────────────────────────────
+// Source type colors (for the stacked bar)
+// ──────────────────────────────────────────────
+
+const SOURCE_TYPE_COLORS = {
+  internet: '#3B82F6',       // blue
+  publications: '#8B5CF6',   // purple
+  studentPapers: '#F97316',  // orange
+  primarySources: '#10B981', // green
+};
+
+const SOURCE_TYPE_LABELS = {
+  internet: 'Internet Sources',
+  publications: 'Publications',
+  studentPapers: 'Student Papers',
+  primarySources: 'Primary Sources',
+};
 
 // ──────────────────────────────────────────────
 // Utility functions
@@ -194,20 +237,6 @@ function getSimScoreColor(score: number): string {
   return 'text-red-600';
 }
 
-function getSimScoreBg(score: number): string {
-  if (score < 25) return 'bg-emerald-500';
-  if (score < 50) return 'bg-amber-500';
-  if (score < 75) return 'bg-orange-500';
-  return 'bg-red-500';
-}
-
-function getSimScoreBorder(score: number): string {
-  if (score < 25) return 'border-emerald-500 bg-emerald-50';
-  if (score < 50) return 'border-amber-500 bg-amber-50';
-  if (score < 75) return 'border-orange-500 bg-orange-50';
-  return 'border-red-500 bg-red-50';
-}
-
 function getSimScoreLabel(score: number): string {
   if (score < 25) return 'Low similarity';
   if (score < 50) return 'Moderate similarity';
@@ -226,7 +255,7 @@ function getSourceTypeIcon(type: string) {
 
 function getSourceTypeLabel(type: string): string {
   switch (type) {
-    case 'internet': return 'Internet Source';
+    case 'internet': return 'Internet';
     case 'publication': return 'Publication';
     case 'student_paper': return 'Student Paper';
     default: return 'Source';
@@ -234,22 +263,171 @@ function getSourceTypeLabel(type: string): string {
 }
 
 // ──────────────────────────────────────────────
+// Similarity Score Circle Component (Turnitin-style)
+// ──────────────────────────────────────────────
+
+function SimilarityScoreCircle({ score, label, size = 120 }: { score: number; label: string; size?: number }) {
+  const clampedScore = Math.max(0, Math.min(100, score));
+  const getColor = (s: number) => {
+    if (s < 25) return '#10b981';
+    if (s < 50) return '#f59e0b';
+    if (s < 75) return '#f97316';
+    return '#ef4444';
+  };
+  const color = getColor(clampedScore);
+
+  // SVG circle calculations
+  const strokeWidth = 8;
+  const radius = (size - strokeWidth * 2) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (clampedScore / 100) * circumference;
+
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <div className="relative" style={{ width: size, height: size }}>
+        <svg width={size} height={size} className="-rotate-90">
+          {/* Background circle */}
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="#e5e7eb"
+            strokeWidth={strokeWidth}
+          />
+          {/* Progress circle */}
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke={color}
+            strokeWidth={strokeWidth}
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+            strokeLinecap="round"
+            className="transition-all duration-1000 ease-out"
+          />
+        </svg>
+        {/* Center text */}
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <span className="text-2xl font-bold" style={{ color }}>
+            {Math.round(clampedScore)}%
+          </span>
+        </div>
+      </div>
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Stacked Source Bar Component
+// ──────────────────────────────────────────────
+
+function StackedSourceBar({ sourceTypeBreakdown }: { sourceTypeBreakdown: SourceTypeBreakdown | undefined }) {
+  const breakdown = sourceTypeBreakdown || {
+    internet: { matchedWords: 0, percentage: 0, sourceCount: 0 },
+    publications: { matchedWords: 0, percentage: 0, sourceCount: 0 },
+    studentPapers: { matchedWords: 0, percentage: 0, sourceCount: 0 },
+    primarySources: { matchedWords: 0, percentage: 0, sourceCount: 0 },
+  };
+
+  const segments = [
+    { key: 'internet' as const, ...breakdown.internet, color: SOURCE_TYPE_COLORS.internet, icon: <Globe className="h-3 w-3" /> },
+    { key: 'publications' as const, ...breakdown.publications, color: SOURCE_TYPE_COLORS.publications, icon: <BookOpen className="h-3 w-3" /> },
+    { key: 'studentPapers' as const, ...breakdown.studentPapers, color: SOURCE_TYPE_COLORS.studentPapers, icon: <GraduationCap className="h-3 w-3" /> },
+    { key: 'primarySources' as const, ...breakdown.primarySources, color: SOURCE_TYPE_COLORS.primarySources, icon: <Star className="h-3 w-3" /> },
+  ].filter(s => s.percentage > 0);
+
+  const totalPct = segments.reduce((sum, s) => sum + s.percentage, 0);
+
+  if (totalPct === 0) return null;
+
+  return (
+    <div className="space-y-3">
+      {/* Stacked bar */}
+      <div className="flex h-4 rounded-full overflow-hidden bg-gray-100">
+        {segments.map((seg) => (
+          <TooltipProvider key={seg.key} delayDuration={100}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div
+                  className="h-full transition-all duration-700 cursor-pointer hover:opacity-80 relative group"
+                  style={{
+                    width: `${(seg.percentage / totalPct) * 100}%`,
+                    backgroundColor: seg.color,
+                    minWidth: segments.length === 1 ? '100%' : '2px',
+                  }}
+                >
+                  {segments.length <= 4 && (seg.percentage / totalPct) > 0.08 && (
+                    <span className="absolute inset-0 flex items-center justify-center text-[9px] font-bold text-white whitespace-nowrap">
+                      {seg.percentage}%
+                    </span>
+                  )}
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="text-xs">
+                <div className="font-medium">{SOURCE_TYPE_LABELS[seg.key]}</div>
+                <div>{seg.percentage}% of matches · {seg.sourceCount} source{seg.sourceCount !== 1 ? 's' : ''}</div>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ))}
+      </div>
+
+      {/* Legend */}
+      <div className="flex flex-wrap gap-x-4 gap-y-2">
+        {segments.map((seg) => (
+          <div key={seg.key} className="flex items-center gap-1.5">
+            <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: seg.color }} />
+            <span className="text-xs text-muted-foreground flex items-center gap-1">
+              {seg.icon}
+              {SOURCE_TYPE_LABELS[seg.key]}
+            </span>
+            <span className="text-xs font-semibold">{seg.percentage}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
 // Document Viewer with Inline Highlighting
 // ──────────────────────────────────────────────
+
+interface DocumentViewerProps {
+  documentContent: string;
+  matchRegions: MatchRegion[];
+  activeSourceId: string | null;
+  onSourceClick: (sourceId: string | null) => void;
+}
 
 function DocumentViewer({
   documentContent,
   matchRegions,
-}: {
-  documentContent: string;
-  matchRegions: MatchRegion[];
-}) {
-  const highlightedContent = useMemo(() => {
-    if (!documentContent || !matchRegions || matchRegions.length === 0) {
-      return [{ text: documentContent || 'No document content available.', highlighted: false, sourceTitle: '', color: '' }];
+  activeSourceId,
+  onSourceClick,
+}: DocumentViewerProps) {
+  const [sourceFilter, setSourceFilter] = useState<Set<string>>(new Set());
+  const viewerRef = useRef<HTMLDivElement>(null);
+  const highlightRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const [pulsingSourceId, setPulsingSourceId] = useState<string | null>(null);
+
+  // Build highlighted content segments
+  const { paragraphs, lineStartIndices } = useMemo(() => {
+    if (!documentContent || matchRegions.length === 0) {
+      const lines = (documentContent || 'No document content available.').split('\n');
+      const segments: { text: string; highlighted: false; sourceTitle: ''; color: ''; sourceId: ''; sourceType: ''; percentageOfDocument: 0; wordCount: 0; isPrimary: false }[][] = [];
+      let lineIdx = 0;
+      for (const line of lines) {
+        segments.push([{ text: line || ' ', highlighted: false, sourceTitle: '', color: '', sourceId: '', sourceType: '', percentageOfDocument: 0, wordCount: 0, isPrimary: false }]);
+        lineIdx++;
+      }
+      return { paragraphs: segments, lineStartIndices: [] };
     }
 
-    // Normalize the text the same way the engine does to align words
     const normalizedText = documentContent
       .toLowerCase()
       .replace(/[^\w\s]/g, '')
@@ -258,9 +436,11 @@ function DocumentViewer({
 
     const words = normalizedText.split(' ').filter(w => w.length > 0);
 
-    // Build a lookup: for each word index, which region matches?
+    // Build word-to-region map (first region wins for overlapping)
     const wordToRegion = new Map<number, MatchRegion>();
     for (const region of matchRegions) {
+      // Skip if this source type is filtered out
+      if (sourceFilter.size > 0 && sourceFilter.has(region.sourceType)) continue;
       for (let w = region.startWordIndex; w <= region.endWordIndex && w < words.length; w++) {
         if (!wordToRegion.has(w)) {
           wordToRegion.set(w, region);
@@ -268,8 +448,8 @@ function DocumentViewer({
       }
     }
 
-    // Build output segments
-    const segments: { text: string; highlighted: boolean; sourceTitle: string; color: string }[] = [];
+    // Build segments
+    const allSegments: { text: string; highlighted: boolean; sourceTitle: string; color: string; sourceId: string; sourceType: string; percentageOfDocument: number; wordCount: number; isPrimary: boolean }[] = [];
     let currentSegment = '';
     let isCurrentHighlighted = false;
     let currentRegion: MatchRegion | null = null;
@@ -279,13 +459,17 @@ function DocumentViewer({
       const isHighlighted = !!region;
 
       if (isHighlighted !== isCurrentHighlighted || (isHighlighted && region && currentRegion && region.sourceId !== currentRegion.sourceId)) {
-        // Flush previous segment
         if (currentSegment) {
-          segments.push({
+          allSegments.push({
             text: currentSegment.trim(),
             highlighted: isCurrentHighlighted,
             sourceTitle: currentRegion?.sourceTitle || '',
             color: currentRegion ? getSourceColor(currentRegion.sourceId) : '',
+            sourceId: currentRegion?.sourceId || '',
+            sourceType: currentRegion?.sourceType || '',
+            percentageOfDocument: 0,
+            wordCount: currentRegion?.wordCount || 0,
+            isPrimary: currentRegion?.isPrimary || false,
           });
         }
         currentSegment = '';
@@ -296,171 +480,338 @@ function DocumentViewer({
       currentSegment += (currentSegment ? ' ' : '') + words[i];
     }
 
-    // Flush last segment
     if (currentSegment) {
-      segments.push({
+      allSegments.push({
         text: currentSegment.trim(),
         highlighted: isCurrentHighlighted,
         sourceTitle: currentRegion?.sourceTitle || '',
         color: currentRegion ? getSourceColor(currentRegion.sourceId) : '',
+        sourceId: currentRegion?.sourceId || '',
+        sourceType: currentRegion?.sourceType || '',
+        percentageOfDocument: 0,
+        wordCount: currentRegion?.wordCount || 0,
+        isPrimary: currentRegion?.isPrimary || false,
       });
     }
 
-    return segments;
-  }, [documentContent, matchRegions]);
+    // Split into paragraphs (by newlines in original text, approximated)
+    const originalLines = documentContent.split('\n');
+    const lineStartIndices: number[] = [];
+    let idx = 0;
+    for (const line of originalLines) {
+      lineStartIndices.push(idx);
+      idx += line.split(/\s+/).filter(w => w.length > 0).length;
+    }
 
-  // Split into paragraphs for display
-  const paragraphs = useMemo(() => {
-    const result: typeof highlightedContent[] = [];
-    let current: typeof highlightedContent = [];
+    // Simple paragraph splitting: group every ~15 words as a paragraph
+    const pGroups: (typeof allSegments)[] = [];
+    let currentGroup: (typeof allSegments)[number][] = [];
+    let wordCountInGroup = 0;
 
-    for (const segment of highlightedContent) {
-      const parts = segment.text.split(/\n+/);
-      for (let i = 0; i < parts.length; i++) {
-        if (i > 0 && current.length > 0) {
-          result.push(current);
-          current = [];
-        }
-        current.push({ ...segment, text: parts[i] });
+    for (const seg of allSegments) {
+      const segWords = seg.text.split(/\s+/).filter(w => w.length > 0).length;
+      if (wordCountInGroup + segWords > 20 && currentGroup.length > 0) {
+        pGroups.push(currentGroup);
+        currentGroup = [];
+        wordCountInGroup = 0;
+      }
+      currentGroup.push(seg);
+      wordCountInGroup += segWords;
+    }
+    if (currentGroup.length > 0) pGroups.push(currentGroup);
+
+    return { paragraphs: pGroups, lineStartIndices };
+  }, [documentContent, matchRegions, sourceFilter]);
+
+  // Handle scroll to active source and pulse animation
+  const lastScrolledRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (activeSourceId && activeSourceId !== lastScrolledRef.current && highlightRefs.current.has(activeSourceId)) {
+      const el = highlightRefs.current.get(activeSourceId);
+      if (el) {
+        lastScrolledRef.current = activeSourceId;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const startTimer = setTimeout(() => setPulsingSourceId(activeSourceId), 400);
+        const endTimer = setTimeout(() => {
+          setPulsingSourceId(null);
+          lastScrolledRef.current = null;
+        }, 2400);
+        return () => {
+          clearTimeout(startTimer);
+          clearTimeout(endTimer);
+        };
       }
     }
+  }, [activeSourceId]);
 
-    if (current.length > 0) {
-      result.push(current);
-    }
+  // Count active source types in regions
+  const activeTypes = useMemo(() => {
+    const types = new Set(matchRegions.map(r => r.sourceType));
+    return types;
+  }, [matchRegions]);
 
-    return result;
-  }, [highlightedContent]);
+  const toggleSourceType = useCallback((type: string) => {
+    setSourceFilter(prev => {
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      return next;
+    });
+  }, []);
 
   return (
-    <div className="rounded-lg border bg-white p-4 sm:p-6">
-      <div className="flex items-center gap-2 mb-4">
-        <FileText className="h-4 w-4 text-muted-foreground" />
-        <h3 className="text-sm font-semibold text-muted-foreground">Document Viewer — Matched Text Highlighted</h3>
-      </div>
-      <div className="max-h-[500px] overflow-y-auto space-y-3 text-sm leading-relaxed text-gray-800">
-        {paragraphs.map((segments, pi) => (
-          <p key={pi}>
-            {segments.map((seg, si) => {
-              if (seg.highlighted) {
-                return (
-                  <TooltipProvider key={`${pi}-${si}`} delayDuration={200}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <mark
-                          className="px-0.5 rounded-sm cursor-pointer transition-opacity hover:opacity-80"
-                          style={{ backgroundColor: seg.color, color: '#1a1a1a' }}
-                        >
-                          {seg.text}
-                        </mark>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs">
-                        <p className="font-medium text-xs">{seg.sourceTitle}</p>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          {getSourceTypeLabel(
-                            matchRegions.find(r => r.sourceTitle === seg.sourceTitle)?.sourceType || 'publication'
-                          )}
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                );
-              }
-              return <span key={`${pi}-${si}`}>{seg.text}</span>;
-            })}
-          </p>
+    <div className="rounded-lg border bg-white overflow-hidden">
+      {/* Source filter toolbar */}
+      <div className="flex items-center gap-2 px-4 py-2.5 bg-gray-50 border-b flex-wrap">
+        <Filter className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <span className="text-xs font-medium text-muted-foreground mr-1">Filter:</span>
+        {[{ type: 'internet' as const, label: 'Internet', color: '#3B82F6' },
+          { type: 'publication' as const, label: 'Publications', color: '#8B5CF6' },
+          { type: 'student_paper' as const, label: 'Student Papers', color: '#F97316' },
+        ].filter(t => activeTypes.has(t.type)).map(({ type, label, color }) => (
+          <button
+            key={type}
+            onClick={() => toggleSourceType(type)}
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all border ${
+              sourceFilter.has(type)
+                ? 'bg-white opacity-50 line-through'
+                : 'bg-white hover:shadow-sm'
+            }`}
+            style={{ borderColor: color, color: sourceFilter.has(type) ? '#9ca3af' : color }}
+          >
+            {getSourceTypeIcon(type)}
+            {label}
+          </button>
         ))}
+        {sourceFilter.size > 0 && (
+          <button
+            onClick={() => setSourceFilter(new Set())}
+            className="text-xs text-muted-foreground hover:text-foreground underline ml-1"
+          >
+            Show all
+          </button>
+        )}
+      </div>
+
+      {/* Document content */}
+      <div ref={viewerRef} className="max-h-[600px] overflow-y-auto p-4 sm:p-6">
+        <div className="flex">
+          {/* Line numbers */}
+          <div className="flex-shrink-0 pr-3 select-none">
+            {paragraphs.map((_, pi) => (
+              <div key={pi} className="text-xs text-gray-300 leading-relaxed text-right" style={{ minHeight: '1.75em' }}>
+                {pi + 1}
+              </div>
+            ))}
+          </div>
+
+          {/* Content */}
+          <div className="flex-1 min-w-0">
+            {paragraphs.map((segments, pi) => (
+              <p key={pi} className="text-sm leading-relaxed text-gray-800 mb-3">
+                {segments.map((seg, si) => {
+                  if (seg.highlighted) {
+                    const isActive = activeSourceId === seg.sourceId;
+                    const isPulsing = pulsingSourceId === seg.sourceId;
+
+                    return (
+                      <TooltipProvider key={`${pi}-${si}`} delayDuration={150}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <mark
+                              ref={(el) => {
+                                if (el && seg.sourceId) {
+                                  if (!highlightRefs.current.has(seg.sourceId)) {
+                                    highlightRefs.current.set(seg.sourceId, el);
+                                  }
+                                }
+                              }}
+                              className={`px-0.5 rounded-sm cursor-pointer transition-all ${
+                                isPulsing ? 'animate-pulse ring-2 ring-offset-1 ring-[#008751]' : ''
+                              } ${isActive ? 'ring-2 ring-offset-1 ring-[#008751]' : 'hover:ring-1 hover:ring-offset-1 hover:ring-gray-300'}`}
+                              style={{ backgroundColor: seg.color, color: '#1a1a1a' }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onSourceClick(seg.sourceId === activeSourceId ? null : seg.sourceId);
+                              }}
+                            >
+                              {seg.text}
+                              {seg.isPrimary && (
+                                <Star className="inline h-2.5 w-2.5 ml-0.5 text-yellow-600 -mt-0.5" fill="currentColor" />
+                              )}
+                            </mark>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs" sideOffset={5}>
+                            <p className="font-medium text-xs">{seg.sourceTitle}</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {getSourceTypeLabel(seg.sourceType)}
+                              {seg.isPrimary && <span className="ml-1 text-yellow-600 font-semibold">Primary</span>}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-0.5 italic">Click to filter by this source</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    );
+                  }
+                  return <span key={`${pi}-${si}`}>{seg.text}</span>;
+                })}
+              </p>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
 // ──────────────────────────────────────────────
-// Source Panel
+// Source Panel (Collapsible, Clickable)
 // ──────────────────────────────────────────────
 
-function SourcePanel({ sourceBreakdown }: { sourceBreakdown: SourceBreakdown[] }) {
+interface SourcePanelProps {
+  sourceBreakdown: SourceBreakdown[];
+  activeSourceId: string | null;
+  onSourceClick: (sourceId: string | null) => void;
+  matchRegions: MatchRegion[];
+}
+
+function SourcePanel({ sourceBreakdown, activeSourceId, onSourceClick, matchRegions }: SourcePanelProps) {
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+
   const internetSources = sourceBreakdown.filter(s => s.sourceType === 'internet');
   const publications = sourceBreakdown.filter(s => s.sourceType === 'publication');
   const studentPapers = sourceBreakdown.filter(s => s.sourceType === 'student_paper');
 
+  const toggleGroup = (group: string) => {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(group)) next.delete(group);
+      else next.add(group);
+      return next;
+    });
+  };
+
+  // Get count of regions for a source
+  const getRegionCount = (sourceId: string) => {
+    return matchRegions.filter(r => r.sourceId === sourceId).length;
+  };
+
   const renderSourceSection = (
+    groupKey: string,
     title: string,
     icon: React.ReactNode,
     sources: SourceBreakdown[],
+    accentColor: string,
   ) => {
     if (sources.length === 0) return null;
+    const isCollapsed = collapsedGroups.has(groupKey);
 
     return (
       <div className="space-y-2">
-        <h4 className="text-sm font-semibold flex items-center gap-2 text-muted-foreground">
+        <button
+          onClick={() => toggleGroup(groupKey)}
+          className="w-full flex items-center gap-2 text-left hover:bg-muted/30 rounded-md px-1 py-1 transition-colors"
+        >
           {icon}
-          {title}
+          <span className="text-sm font-semibold text-muted-foreground flex-1">{title}</span>
           <Badge variant="secondary" className="text-xs">{sources.length}</Badge>
-        </h4>
-        {sources.map((source, i) => {
-          const color = getSourceColor(source.sourceId);
-          return (
-            <div key={source.sourceId} className="border rounded-lg p-3">
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-start gap-2 min-w-0 flex-1">
-                  <div
-                    className="w-2 h-2 rounded-full mt-1.5 shrink-0"
-                    style={{ backgroundColor: color }}
-                  />
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">{source.sourceTitle}</p>
-                    <p className="text-xs text-muted-foreground flex items-center gap-2 mt-0.5">
-                      <span>{getSourceTypeLabel(source.sourceType)}</span>
-                      <span>·</span>
-                      <span>{source.matchedWords} words matched</span>
-                      <span>·</span>
-                      <span className="font-semibold">{source.percentageOfDocument}%</span>
-                    </p>
-                    {source.sourceUrl && (
-                      <a
-                        href={source.sourceUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-blue-600 hover:underline flex items-center gap-1 mt-1"
-                      >
-                        <ExternalLink className="h-3 w-3" />
-                        {source.sourceUrl.substring(0, 60)}{source.sourceUrl.length > 60 ? '...' : ''}
-                      </a>
-                    )}
-                  </div>
-                </div>
-                <Badge
-                  variant="outline"
-                  className="text-xs shrink-0"
-                  style={{ borderColor: color, color: color }}
+          {isCollapsed ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />}
+        </button>
+
+        {!isCollapsed && (
+          <div className="space-y-1.5 pl-1">
+            {sources.map((source) => {
+              const color = getSourceColor(source.sourceId);
+              const isActive = activeSourceId === source.sourceId;
+              const regionCount = getRegionCount(source.sourceId);
+
+              return (
+                <button
+                  key={source.sourceId}
+                  onClick={() => onSourceClick(isActive ? null : source.sourceId)}
+                  className={`w-full text-left rounded-lg p-2.5 transition-all border ${
+                    isActive
+                      ? 'border-[#008751] bg-[#008751]/5 shadow-sm ring-1 ring-[#008751]/20'
+                      : 'border-transparent hover:bg-muted/50 hover:border-muted'
+                  }`}
                 >
-                  {source.matchCount} {source.matchCount === 1 ? 'match' : 'matches'}
-                </Badge>
-              </div>
-              {/* Mini progress bar showing percentage */}
-              <div className="mt-2 h-1.5 rounded-full bg-muted overflow-hidden">
-                <div
-                  className="h-full rounded-full"
-                  style={{
-                    backgroundColor: color,
-                    width: `${Math.min(source.percentageOfDocument, 100)}%`,
-                    opacity: 0.7,
-                  }}
-                />
-              </div>
-            </div>
-          );
-        })}
+                  <div className="flex items-start gap-2">
+                    {/* Color indicator */}
+                    <div
+                      className="w-1 self-stretch rounded-full shrink-0 mt-0.5"
+                      style={{ backgroundColor: color }}
+                    />
+
+                    <div className="min-w-0 flex-1">
+                      {/* Title row */}
+                      <div className="flex items-start justify-between gap-1">
+                        <p className={`text-xs font-medium truncate leading-tight ${isActive ? 'text-[#008751]' : ''}`}>
+                          {source.sourceTitle}
+                        </p>
+                        {source.isPrimary && (
+                          <TooltipProvider delayDuration={100}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Star className="h-3 w-3 text-yellow-500 shrink-0 mt-0.5" fill="currentColor" />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="text-xs">Primary Source</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
+                      </div>
+
+                      {/* Meta row */}
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] px-1.5 py-0 h-4 font-semibold"
+                          style={{ borderColor: color, color: color }}
+                        >
+                          {source.percentageOfDocument}%
+                        </Badge>
+                        <span className="text-[10px] text-muted-foreground">
+                          {regionCount} {regionCount === 1 ? 'region' : 'regions'}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {source.matchedWords} words
+                        </span>
+                      </div>
+
+                      {/* Source type badge */}
+                      <div className="flex items-center gap-1 mt-1">
+                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 gap-0.5">
+                          {getSourceTypeIcon(source.sourceType)}
+                          {getSourceTypeLabel(source.sourceType)}
+                        </Badge>
+                      </div>
+
+                      {/* Mini bar */}
+                      <div className="mt-1.5 h-1 rounded-full bg-muted overflow-hidden max-w-full">
+                        <div
+                          className="h-full rounded-full transition-all"
+                          style={{
+                            backgroundColor: color,
+                            width: `${Math.min(source.percentageOfDocument * 4, 100)}%`,
+                            opacity: isActive ? 1 : 0.6,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   };
 
   return (
-    <div className="space-y-4">
-      {renderSourceSection('Internet Sources', <Globe className="h-3.5 w-3.5" />, internetSources)}
-      {renderSourceSection('Publications', <BookOpen className="h-3.5 w-3.5" />, publications)}
-      {renderSourceSection('Student Papers', <GraduationCap className="h-3.5 w-3.5" />, studentPapers)}
+    <div className="space-y-3">
+      {renderSourceSection('internet', 'Internet Sources', <Globe className="h-3.5 w-3.5 text-[#3B82F6]" />, internetSources, '#3B82F6')}
+      {renderSourceSection('publications', 'Publications', <BookOpen className="h-3.5 w-3.5 text-[#8B5CF6]" />, publications, '#8B5CF6')}
+      {renderSourceSection('student_papers', 'Student Papers', <GraduationCap className="h-3.5 w-3.5 text-[#F97316]" />, studentPapers, '#F97316')}
     </div>
   );
 }
@@ -473,6 +824,8 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
   const [segmentStates, setSegmentStates] = useState<Map<string, SegmentRewriteState>>(new Map());
   const [expandedMatches, setExpandedMatches] = useState<Set<number>>(new Set());
   const [showAllSentences, setShowAllSentences] = useState(false);
+  const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
+  const [isDownloadingDocx, setIsDownloadingDocx] = useState(false);
 
   const flaggedSentences = (report.aiDetection.sentences || []).filter(s => s.isFlagged);
   const displaySentences = showAllSentences ? flaggedSentences : flaggedSentences.slice(0, 5);
@@ -482,6 +835,11 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
   const totalWords = report.plagiarism.totalWords || 0;
   const matchedWords = report.plagiarism.matchedWords || 0;
   const excludedWords = report.plagiarism.excludedWords || 0;
+  const sourceTypeBreakdown = report.plagiarism.sourceTypeBreakdown;
+
+  const handleSourceClick = useCallback((sourceId: string | null) => {
+    setActiveSourceId(sourceId);
+  }, []);
 
   const handleRewrite = async (segmentText: string, index: number) => {
     const key = `seg-${index}`;
@@ -574,6 +932,38 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
     });
   };
 
+  const handleDownloadHighlight = useCallback(async () => {
+    if (!report.reportId) return;
+    setIsDownloadingDocx(true);
+    try {
+      const response = await fetch('/api/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportId: report.reportId, format: 'highlighted_docx' }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Download failed' }));
+        throw new Error(errorData.error || 'Download failed');
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const safeTitle = (report.title || 'report').replace(/[^a-zA-Z0-9._-]/g, '_').substring(0, 100);
+      a.download = `${safeTitle}_originality_report.docx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to download highlighted report:', err);
+      // Show a simple alert as fallback
+      alert(err instanceof Error ? err.message : 'Failed to download highlighted report. Please try again.');
+    } finally {
+      setIsDownloadingDocx(false);
+    }
+  }, [report.reportId, report.title]);
+
   const getVerdictColor = (status: string) => {
     switch (status) {
       case 'original': return 'border-emerald-500 bg-emerald-50';
@@ -594,19 +984,24 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
     }
   };
 
+  const getVerdictIconColor = (status: string) => {
+    switch (status) {
+      case 'original': return 'text-emerald-600';
+      case 'warning': return 'text-amber-600';
+      case 'flagged': return 'text-orange-600';
+      case 'critical': return 'text-red-600';
+      default: return 'text-gray-600';
+    }
+  };
+
   return (
     <div className="space-y-6">
-      {/* Verdict Banner */}
-      <div className={`rounded-xl border-l-4 p-4 ${getVerdictColor(report.verdict.status)}`}>
+      {/* ── Report Header with Verdict ── */}
+      <div className={`rounded-xl border-l-4 p-4 sm:p-5 ${getVerdictColor(report.verdict.status)}`}>
         <div className="flex items-start gap-3">
-          <AlertTriangle className={`h-5 w-5 mt-0.5 ${
-            report.verdict.status === 'original' ? 'text-emerald-600' :
-            report.verdict.status === 'warning' ? 'text-amber-600' :
-            report.verdict.status === 'flagged' ? 'text-orange-600' :
-            'text-red-600'
-          }`} />
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-1">
+          <AlertTriangle className={`h-5 w-5 mt-0.5 shrink-0 ${getVerdictIconColor(report.verdict.status)}`} />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
               <h3 className="font-bold text-lg">
                 {report.verdict.label}
               </h3>
@@ -615,33 +1010,9 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
               </Badge>
             </div>
             <p className="text-sm text-gray-600">{report.verdict.description}</p>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Turnitin-Style Score Banner ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Similarity Score Banner */}
-        <Card className={`border-l-4 ${getSimScoreBorder(report.plagiarism.similarityScore)}`}>
-          <CardContent className="pt-4">
-            <div className="flex items-center gap-3 mb-3">
-              <ShieldCheck className={`h-5 w-5 ${getSimScoreColor(report.plagiarism.similarityScore)}`} />
-              <span className="text-sm font-semibold text-muted-foreground">Similarity Score</span>
-            </div>
-            <div className="flex items-end gap-2 mb-2">
-              <span className={`text-4xl font-bold ${getSimScoreColor(report.plagiarism.similarityScore)}`}>
-                {report.plagiarism.similarityScore}%
-              </span>
-            </div>
-            <Progress
-              value={report.plagiarism.similarityScore}
-              className="h-2.5 mb-2"
-            />
-            <p className={`text-xs font-medium ${getSimScoreColor(report.plagiarism.similarityScore)}`}>
-              {getSimScoreLabel(report.plagiarism.similarityScore)}
-            </p>
+            {/* Stats row */}
             {totalWords > 0 && (
-              <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground">
+              <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground flex-wrap">
                 <span>{totalWords} words total</span>
                 <span className="font-medium text-gray-700">{matchedWords} matched</span>
                 {excludedWords > 0 && (
@@ -650,28 +1021,111 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
                     {excludedWords} excluded
                   </span>
                 )}
+                <span className="flex items-center gap-1">
+                  <FileText className="h-3 w-3" />
+                  {sourceBreakdown.length} source{sourceBreakdown.length !== 1 ? 's' : ''}
+                </span>
+                {report.plagiarism.webSourcesSearched !== undefined && report.plagiarism.webSourcesSearched > 0 && (
+                  <span className="flex items-center gap-1">
+                    <Globe className="h-3 w-3" />
+                    +{report.plagiarism.webSourcesSearched} web sources
+                  </span>
+                )}
               </div>
             )}
-          </CardContent>
-        </Card>
-
-        {/* AI Score Gauge */}
-        <ScoreGauge
-          score={report.aiDetection.aiProbability}
-          label="AI Content"
-          description={report.aiDetection.aiProbability < 25 ? 'Likely human-written' :
-                       report.aiDetection.aiProbability < 50 ? 'Possibly AI-assisted' :
-                       report.aiDetection.aiProbability < 75 ? 'Likely AI-generated' : 'Very likely AI-generated'}
-        />
+          </div>
+        </div>
       </div>
 
-      {/* Summary */}
+      {/* ── Download Highlighted Report Button ── */}
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          className="gap-2 border-[#008751] text-[#008751] hover:bg-[#008751]/5"
+          disabled={isDownloadingDocx}
+          onClick={handleDownloadHighlight}
+        >
+          {isDownloadingDocx ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Generating...
+            </>
+          ) : (
+            <>
+              <Download className="h-4 w-4" />
+              Download Highlighted Report (.docx)
+            </>
+          )}
+        </Button>
+      </div>
+
+      {/* ── Score Section: Two circles + Stacked bar ── */}
       <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Report Summary</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <CardContent className="pt-6">
+          <div className="flex flex-col md:flex-row items-center gap-6 md:gap-10">
+            {/* Similarity Score Circle */}
+            <SimilarityScoreCircle
+              score={report.plagiarism.similarityScore}
+              label="Similarity Index"
+              size={130}
+            />
+
+            {/* AI Detection Score Circle */}
+            <SimilarityScoreCircle
+              score={report.aiDetection.aiProbability}
+              label="AI Detection"
+              size={130}
+            />
+
+            {/* Labels */}
+            <div className="flex flex-col gap-4 flex-1 min-w-0">
+              {/* Similarity label */}
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <ShieldCheck className={`h-4 w-4 ${getSimScoreColor(report.plagiarism.similarityScore)}`} />
+                  <span className={`text-xl font-bold ${getSimScoreColor(report.plagiarism.similarityScore)}`}>
+                    {report.plagiarism.similarityScore}%
+                  </span>
+                </div>
+                <p className={`text-xs font-medium ${getSimScoreColor(report.plagiarism.similarityScore)}`}>
+                  {getSimScoreLabel(report.plagiarism.similarityScore)}
+                </p>
+              </div>
+
+              {/* AI label */}
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <Bot className={`h-4 w-4 ${getAIScoreTextColor(report.aiDetection.aiProbability)}`} />
+                  <span className={`text-xl font-bold ${getAIScoreTextColor(report.aiDetection.aiProbability)}`}>
+                    {report.aiDetection.aiProbability}%
+                  </span>
+                </div>
+                <p className={`text-xs font-medium ${getAIScoreTextColor(report.aiDetection.aiProbability)}`}>
+                  {report.aiDetection.aiProbability < 25 ? 'Likely human-written' :
+                   report.aiDetection.aiProbability < 50 ? 'Possibly AI-assisted' :
+                   report.aiDetection.aiProbability < 75 ? 'Likely AI-generated' : 'Very likely AI-generated'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Stacked Source Bar */}
+          {sourceTypeBreakdown && (
+            <div className="mt-6 pt-5 border-t">
+              <h4 className="text-xs font-semibold text-muted-foreground mb-3 flex items-center gap-1.5">
+                <Info className="h-3.5 w-3.5" />
+                Source Type Breakdown
+              </h4>
+              <StackedSourceBar sourceTypeBreakdown={sourceTypeBreakdown} />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Summary Stats ── */}
+      <Card>
+        <CardContent className="pt-5">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="text-center p-3 rounded-lg bg-muted/50">
               <div className="text-2xl font-bold">{sourceBreakdown.length}</div>
               <div className="text-xs text-muted-foreground">Sources Found</div>
@@ -682,7 +1136,7 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
             </div>
             <div className="text-center p-3 rounded-lg bg-muted/50">
               <div className="text-2xl font-bold capitalize">{report.aiDetection.confidence}</div>
-              <div className="text-xs text-muted-foreground">AI Detection</div>
+              <div className="text-xs text-muted-foreground">AI Confidence</div>
             </div>
             <div className="text-center p-3 rounded-lg bg-muted/50">
               <div className="text-2xl font-bold">{report.plagiarism.totalFingerprints}</div>
@@ -692,35 +1146,62 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
         </CardContent>
       </Card>
 
-      {/* ── Document Viewer with Inline Highlighting ── */}
+      {/* ── Two-Column Layout: Document Viewer + Source Panel ── */}
       {documentContent && matchRegions.length > 0 && (
-        <div>
-          <h3 className="text-base font-bold flex items-center gap-2 mb-3">
-            <FileText className="h-4 w-4" />
-            Originality Report — Document Viewer
-          </h3>
-          <DocumentViewer documentContent={documentContent} matchRegions={matchRegions} />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Left: Document Viewer (2/3) */}
+          <div className="lg:col-span-2">
+            <h3 className="text-sm font-bold flex items-center gap-2 mb-3">
+              <FileText className="h-4 w-4 text-muted-foreground" />
+              Originality Report — Document Viewer
+              {activeSourceId && (
+                <Badge variant="outline" className="text-xs ml-2 text-[#008751] border-[#008751]">
+                  <Eye className="h-3 w-3 mr-1" />
+                  Filtering: {sourceBreakdown.find(s => s.sourceId === activeSourceId)?.sourceTitle?.substring(0, 30) || 'Source'}
+                </Badge>
+              )}
+            </h3>
+            <DocumentViewer
+              documentContent={documentContent}
+              matchRegions={matchRegions}
+              activeSourceId={activeSourceId}
+              onSourceClick={handleSourceClick}
+            />
+          </div>
+
+          {/* Right: Source Panel (1/3) */}
+          <div className="lg:col-span-1">
+            <h3 className="text-sm font-bold flex items-center gap-2 mb-3">
+              <ExternalLink className="h-4 w-4 text-muted-foreground" />
+              Matched Sources
+              <Badge variant="secondary" className="text-xs">{sourceBreakdown.length}</Badge>
+            </h3>
+            <div className="max-h-[600px] overflow-y-auto pr-1 space-y-1">
+              <SourcePanel
+                sourceBreakdown={sourceBreakdown}
+                activeSourceId={activeSourceId}
+                onSourceClick={handleSourceClick}
+                matchRegions={matchRegions}
+              />
+            </div>
+          </div>
         </div>
       )}
 
-      {/* ── Source Panel (grouped by type) ── */}
-      {sourceBreakdown.length > 0 && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <ExternalLink className="h-4 w-4" />
-              Matched Sources ({sourceBreakdown.length})
-              {report.plagiarism.webSourcesSearched !== undefined && report.plagiarism.webSourcesSearched > 0 && (
-                <Badge variant="secondary" className="text-xs ml-1">
-                  +{report.plagiarism.webSourcesSearched} web sources
-                </Badge>
-              )}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="max-h-[400px] overflow-y-auto">
-            <SourcePanel sourceBreakdown={sourceBreakdown} />
-          </CardContent>
-        </Card>
+      {/* Fallback: Document viewer only (no source panel) if only matchRegions available */}
+      {documentContent && matchRegions.length > 0 && sourceBreakdown.length === 0 && (
+        <div>
+          <h3 className="text-sm font-bold flex items-center gap-2 mb-3">
+            <FileText className="h-4 w-4" />
+            Originality Report — Document Viewer
+          </h3>
+          <DocumentViewer
+            documentContent={documentContent}
+            matchRegions={matchRegions}
+            activeSourceId={null}
+            onSourceClick={() => {}}
+          />
+        </div>
       )}
 
       {/* Source Matches (backward compat — expanded detail) */}
@@ -780,7 +1261,7 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
         </Card>
       )}
 
-      {/* AI Detection Details */}
+      {/* ── AI Detection Details ── */}
       {report.aiDetection.aiProbability > 25 && (
         <Card>
           <CardHeader className="pb-3">
@@ -882,7 +1363,7 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
         </Card>
       )}
 
-      {/* Flagged Segments with Rewrite Buttons */}
+      {/* ── Flagged Segments with Rewrite Buttons ── */}
       {report.plagiarism.flaggedSegments.length > 0 && (
         <div className="space-y-4">
           <h3 className="text-base font-bold flex items-center gap-2">

@@ -31,6 +31,8 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
+import { Slider } from '@/components/ui/slider';
 import {
   Upload,
   Search,
@@ -59,6 +61,10 @@ import {
   ClipboardList,
   Download,
   FileDown,
+  Settings2,
+  Quote,
+  BookMarked,
+  TextQuote,
 } from 'lucide-react';
 
 // ──────────────────────────────────────────────
@@ -142,6 +148,41 @@ interface AssignmentData {
   creator: { id: string; name: string | null; email: string } | null;
 }
 
+interface ExclusionSettings {
+  excludeQuotes: boolean;
+  excludeBibliography: boolean;
+  excludeCitations: boolean;
+  excludeSmallMatches: number;
+}
+
+const DEFAULT_EXCLUSION_SETTINGS: ExclusionSettings = {
+  excludeQuotes: true,
+  excludeBibliography: true,
+  excludeCitations: true,
+  excludeSmallMatches: 0,
+};
+
+const EXCLUSION_SETTINGS_KEY = 'nigwrite-exclusion-settings';
+
+function loadExclusionSettings(): ExclusionSettings {
+  if (typeof window === 'undefined') return DEFAULT_EXCLUSION_SETTINGS;
+  try {
+    const stored = localStorage.getItem(EXCLUSION_SETTINGS_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      return { ...DEFAULT_EXCLUSION_SETTINGS, ...parsed };
+    }
+  } catch { /* ignore */ }
+  return DEFAULT_EXCLUSION_SETTINGS;
+}
+
+function saveExclusionSettings(settings: ExclusionSettings) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(EXCLUSION_SETTINGS_KEY, JSON.stringify(settings));
+  } catch { /* ignore */ }
+}
+
 interface SubmissionData {
   id: string;
   document: { id: string; title: string };
@@ -197,6 +238,24 @@ export default function NigWriteApp() {
   const [newAssignment, setNewAssignment] = useState({ title: '', description: '', courseId: '', deadline: '' });
   const [gradingFeedback, setGradingFeedback] = useState<Record<string, string>>({});
 
+  // Exclusion settings state with localStorage persistence
+  const [exclusionSettings, setExclusionSettings] = useState<ExclusionSettings>(DEFAULT_EXCLUSION_SETTINGS);
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+
+  // Load exclusion settings from localStorage on mount
+  useEffect(() => {
+    const stored = loadExclusionSettings();
+    setExclusionSettings(stored);
+  }, []);
+
+  const updateExclusionSetting = useCallback(<K extends keyof ExclusionSettings>(key: K, value: ExclusionSettings[K]) => {
+    setExclusionSettings(prev => {
+      const next = { ...prev, [key]: value };
+      saveExclusionSettings(next);
+      return next;
+    });
+  }, []);
+
   const handleViewChange = useCallback((view: string) => {
     setCurrentView(view);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -220,6 +279,12 @@ export default function NigWriteApp() {
         body: JSON.stringify({
           title: scanTitle || 'Untitled Document',
           content: scanContent,
+          exclusionSettings: {
+            excludeQuotes: exclusionSettings.excludeQuotes,
+            excludeBibliography: exclusionSettings.excludeBibliography,
+            excludeCitations: exclusionSettings.excludeCitations,
+            excludeSmallMatches: exclusionSettings.excludeSmallMatches,
+          },
         }),
       });
 
@@ -237,7 +302,7 @@ export default function NigWriteApp() {
     } finally {
       setIsScanning(false);
     }
-  }, [scanTitle, scanContent]);
+  }, [scanTitle, scanContent, exclusionSettings]);
 
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -821,6 +886,107 @@ export default function NigWriteApp() {
             </CardContent>
           </Card>
         )}
+
+        {/* Advanced Settings Panel */}
+        <Card className="overflow-hidden">
+          <button
+            onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
+            className="w-full flex items-center justify-between p-4 text-left hover:bg-muted/30 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Settings2 className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-semibold">Advanced Settings</span>
+              <span className="text-xs text-muted-foreground">Exclusion rules for scanning</span>
+            </div>
+            {showAdvancedSettings ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+          </button>
+          {showAdvancedSettings && (
+            <div className="px-4 pb-4 pt-0 border-t bg-muted/20">
+              <div className="space-y-4 pt-4">
+                {/* Exclude quoted text */}
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
+                      <TextQuote className="h-4 w-4 text-blue-600" />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium block">Exclude quoted text</label>
+                      <p className="text-xs text-muted-foreground">Remove text within quotation marks from analysis</p>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={exclusionSettings.excludeQuotes}
+                    onCheckedChange={(checked) => updateExclusionSetting('excludeQuotes', checked)}
+                  />
+                </div>
+
+                {/* Exclude bibliography */}
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center shrink-0">
+                      <BookMarked className="h-4 w-4 text-purple-600" />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium block">Exclude bibliography</label>
+                      <p className="text-xs text-muted-foreground">Skip references, works cited, and bibliography sections</p>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={exclusionSettings.excludeBibliography}
+                    onCheckedChange={(checked) => updateExclusionSetting('excludeBibliography', checked)}
+                  />
+                </div>
+
+                {/* Exclude citations */}
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-8 h-8 rounded-lg bg-orange-50 flex items-center justify-center shrink-0">
+                      <Quote className="h-4 w-4 text-orange-600" />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium block">Exclude citations</label>
+                      <p className="text-xs text-muted-foreground">Remove in-text citations (APA, MLA, IEEE, etc.)</p>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={exclusionSettings.excludeCitations}
+                    onCheckedChange={(checked) => updateExclusionSetting('excludeCitations', checked)}
+                  />
+                </div>
+
+                {/* Minimum match size slider */}
+                <div className="pt-2">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0">
+                        <FileText className="h-4 w-4 text-emerald-600" />
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium block">Minimum match size</label>
+                        <p className="text-xs text-muted-foreground">Ignore matches shorter than this word count</p>
+                      </div>
+                    </div>
+                    <span className="text-sm font-bold text-[#008751] bg-[#008751]/10 px-2.5 py-0.5 rounded-md">
+                      {exclusionSettings.excludeSmallMatches} words
+                    </span>
+                  </div>
+                  <Slider
+                    value={[exclusionSettings.excludeSmallMatches]}
+                    onValueChange={([val]) => updateExclusionSetting('excludeSmallMatches', val)}
+                    min={0}
+                    max={50}
+                    step={1}
+                    className="mt-1"
+                  />
+                  <div className="flex justify-between mt-1">
+                    <span className="text-[10px] text-muted-foreground">0 (all matches)</span>
+                    <span className="text-[10px] text-muted-foreground">50 words</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </Card>
 
         {/* Text Input (single scan) */}
         <Card>

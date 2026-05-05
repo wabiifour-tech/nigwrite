@@ -22,9 +22,13 @@ export interface FingerprintEntry {
 
 class FingerprintStore {
   private store: Map<number, FingerprintEntry[]>;
+  private userStore: Map<number, FingerprintEntry[]>;
+  private userDocumentCount: number;
 
   constructor() {
     this.store = new Map();
+    this.userStore = new Map();
+    this.userDocumentCount = 0;
   }
 
   indexFingerprints(fingerprints: FingerprintEntry[]): void {
@@ -52,6 +56,61 @@ class FingerprintStore {
 
   clear(): void {
     this.store.clear();
+  }
+
+  /**
+   * Add a new user-submitted document to the corpus for future cross-checking.
+   * The document is fingerprinted and stored in a separate user store.
+   */
+  addUserDocument(
+    documentId: string,
+    title: string,
+    content: string,
+    sourceType: 'student_paper' | 'internet',
+  ): void {
+    const engine = new WinnowingEngine();
+    const fingerprints = engine.generateFingerprints(content);
+
+    const entries: FingerprintEntry[] = fingerprints.map(fp => ({
+      hash: fp.hash,
+      documentId,
+      position: fp.position,
+      ngram: fp.ngram,
+      sourceTitle: title,
+      sourceUrl: undefined,
+      sourceType,
+    }));
+
+    // Index into both the main store and the user store
+    this.indexFingerprints(entries);
+    for (const fp of entries) {
+      const existing = this.userStore.get(fp.hash) || [];
+      existing.push(fp);
+      this.userStore.set(fp.hash, existing);
+    }
+
+    this.userDocumentCount++;
+  }
+
+  /**
+   * Get the count of user-submitted documents.
+   */
+  getUserDocumentCount(): number {
+    return this.userDocumentCount;
+  }
+
+  /**
+   * Search only user-submitted documents.
+   */
+  searchUserDocuments(hashes: number[]): Map<number, FingerprintEntry[]> {
+    const matches = new Map<number, FingerprintEntry[]>();
+    for (const hash of hashes) {
+      const entries = this.userStore.get(hash);
+      if (entries && entries.length > 0) {
+        matches.set(hash, [...entries]);
+      }
+    }
+    return matches;
   }
 
   /**

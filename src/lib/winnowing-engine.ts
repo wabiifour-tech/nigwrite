@@ -8,10 +8,12 @@
  *   2. N-Gram Generation (overlapping k-grams, k=8)
  *   3. Rolling Hash (Rabin-Karp)
  *   4. Winnowing Selection (pick representative hashes per window)
- *   5. Quote & Bibliography Exclusion
+ *   5. Quote, Bibliography & Citation Exclusion
  *   6. Match Region Merging (contiguous word ranges)
  *   7. Word-Based Similarity Scoring (matched words / total words × 100)
  *   8. Per-Source Scoring with Overall Deduplication
+ *   9. Source-Type Categorized Scoring (internet, publications, student papers)
+ *  10. Primary Sources Identification (top 3 sources)
  *
  * Reference: Schleimer, S., Wilkerson, D. & Aiken, A. (2003).
  * "Winnowing: Local Algorithms for Document Fingerprinting."
@@ -42,6 +44,22 @@ export interface PlagiarismMatch {
   startPosition: number;
 }
 
+// Exclusion settings for fine-grained control over what is excluded
+export interface ExclusionSettings {
+  excludeQuotes: boolean;       // default true
+  excludeBibliography: boolean; // default true
+  excludeCitations: boolean;    // default true
+  excludeSmallMatches: number;  // default 0 (minimum word count to count as a match)
+}
+
+// Default exclusion settings
+export const DEFAULT_EXCLUSION_SETTINGS: ExclusionSettings = {
+  excludeQuotes: true,
+  excludeBibliography: true,
+  excludeCitations: true,
+  excludeSmallMatches: 0,
+};
+
 // A contiguous region of matched words in the submitted document
 export interface MatchRegion {
   startWordIndex: number;
@@ -52,6 +70,7 @@ export interface MatchRegion {
   sourceType: 'internet' | 'publication' | 'student_paper';
   sourceUrl?: string;
   wordCount: number;
+  isPrimary?: boolean; // true if this region belongs to a primary source
 }
 
 // Per-source breakdown of matches
@@ -64,6 +83,15 @@ export interface SourceBreakdown {
   matchedWords: number;
   percentageOfDocument: number;
   regions: MatchRegion[];
+  isPrimary?: boolean; // true if this is one of the top 3 most-matched sources
+}
+
+// Per-source-type breakdown (Turnitin-style)
+export interface SourceTypeBreakdown {
+  internet: { matchedWords: number; percentage: number; sourceCount: number };
+  publications: { matchedWords: number; percentage: number; sourceCount: number };
+  studentPapers: { matchedWords: number; percentage: number; sourceCount: number };
+  primarySources: { matchedWords: number; percentage: number; sourceCount: number };
 }
 
 // Complete scan result
@@ -76,6 +104,9 @@ export interface ScanResult {
   matchRegions: MatchRegion[];
   flaggedSegments: string[];
   matches: PlagiarismMatch[];
+  // New Turnitin-style fields
+  sourceTypeBreakdown: SourceTypeBreakdown;
+  primarySources: SourceBreakdown[]; // top 3 sources by matched word count
 }
 
 // Internal representation of a matched n-gram position
@@ -96,6 +127,16 @@ export interface CorpusMatchEntry {
   sourceUrl?: string;
   sourceType: 'internet' | 'publication' | 'student_paper';
   position: number;
+}
+
+// Empty source-type breakdown
+function emptySourceTypeBreakdown(): SourceTypeBreakdown {
+  return {
+    internet: { matchedWords: 0, percentage: 0, sourceCount: 0 },
+    publications: { matchedWords: 0, percentage: 0, sourceCount: 0 },
+    studentPapers: { matchedWords: 0, percentage: 0, sourceCount: 0 },
+    primarySources: { matchedWords: 0, percentage: 0, sourceCount: 0 },
+  };
 }
 
 export class WinnowingEngine {
@@ -120,27 +161,37 @@ export class WinnowingEngine {
   }
 
   /**
-   * Exclude quoted text and bibliography sections from content.
+   * Exclude quoted text from content.
    * Returns the cleaned text and the count of excluded words.
    */
-  excludeQuotesAndBibliography(text: string): { cleanedText: string; excludedWordCount: number } {
+  private excludeQuotes(text: string): { cleanedText: string; excludedWordCount: number } {
     let excludedWords = 0;
 
-    // 1. Remove text in quotes (both single and double quotes)
-    let cleaned = text.replace(/"([^"]+)"/g, (_match, _content) => {
-      const words = _content.split(/\s+/).filter(w => w.length > 0);
+    // Remove text in quotes (both single and double quotes)
+    let cleaned = text.replace(/"([^"]+)"/g, (_match, content) => {
+      const words = content.split(/\s+/).filter(w => w.length > 0);
       excludedWords += words.length;
       return '';
     });
 
-    cleaned = cleaned.replace(/'([^']+)'/g, (_match, _content) => {
-      const words = _content.split(/\s+/).filter(w => w.length > 0);
+    cleaned = cleaned.replace(/'([^']+)'/g, (_match, content) => {
+      const words = content.split(/\s+/).filter(w => w.length > 0);
       excludedWords += words.length;
       return '';
     });
 
-    // 2. Remove bibliography / references / works cited sections
-    // These sections typically start with a header and continue to end of document
+    cleaned = cleaned.replace(/\s+/g, ' ').trim();
+
+    return { cleanedText: cleaned, excludedWordCount: excludedWords };
+  }
+
+  /**
+   * Exclude bibliography / references / works cited sections from content.
+   * Returns the cleaned text and the count of excluded words.
+   */
+  private excludeBibliography(text: string): { cleanedText: string; excludedWordCount: number } {
+    let excludedWords = 0;
+
     const biblioHeaders = [
       /^references\s*$/im,
       /^bibliography\s*$/im,
@@ -149,6 +200,7 @@ export class WinnowingEngine {
       /^list\s+of\s+references\s*$/im,
     ];
 
+    let cleaned = text;
     for (const header of biblioHeaders) {
       const match = cleaned.match(header);
       if (match && match.index !== undefined) {
@@ -159,10 +211,138 @@ export class WinnowingEngine {
       }
     }
 
-    // Clean up extra whitespace
     cleaned = cleaned.replace(/\s+/g, ' ').trim();
 
     return { cleanedText: cleaned, excludedWordCount: excludedWords };
+  }
+
+  /**
+   * Exclude in-text citation patterns before fingerprinting.
+   * Detects and removes:
+   *   - Parenthetical citations: (Author, Year), (Author, Year, p. 123)
+   *   - Bracket citations: [1], [Author, Year]
+   *   - Narrative citations: Author (Year) when followed by findings/says/states/etc.
+   *   - APA-style: et al. (Year), (Eds.), (Trans.)
+   *
+   * Returns the cleaned text and the count of excluded words.
+   */
+  excludeCitations(text: string): { cleanedText: string; excludedWordCount: number } {
+    let excludedWords = 0;
+
+    let cleaned = text;
+
+    // 1. Parenthetical citations: (Author, Year) with optional page number
+    //    e.g. (Smith, 2020), (Smith & Jones, 2020), (Smith et al., 2020, p. 15)
+    cleaned = cleaned.replace(
+      /\([^)]*\b(?:19|20)\d{2}\b[^)]*\)/g,
+      (match) => {
+        // Only match if it looks like a citation (has a year pattern and author-like content)
+        if (/^\([^)]*\b(?:19|20)\d{2}\b[^)]*\)$/.test(match)) {
+          const words = match.split(/\s+/).filter(w => w.length > 0);
+          excludedWords += words.length;
+          return '';
+        }
+        return match;
+      }
+    );
+
+    // 2. Bracket numeric citations: [1], [2, 3], [1, pp. 15-20]
+    cleaned = cleaned.replace(
+      /\[\d+(?:\s*[;,]\s*\d+)*(?:\s*[;,]\s*pp?\.\s*\d+(?:\s*-\s*\d+)?)?\]/g,
+      (match) => {
+        const words = match.split(/\s+/).filter(w => w.length > 0);
+        excludedWords += words.length;
+        return '';
+      }
+    );
+
+    // 3. Bracket author citations: [Author, Year], [Author et al., Year]
+    cleaned = cleaned.replace(
+      /\[[^\]]*\b(?:19|20)\d{2}\b[^\]]*\]/g,
+      (match) => {
+        const words = match.split(/\s+/).filter(w => w.length > 0);
+        excludedWords += words.length;
+        return '';
+      }
+    );
+
+    // 4. Narrative citations: Author (Year) followed by reporting verbs
+    //    e.g. "Smith (2020) found", "Johnson and Lee (2019) argue", "et al. (2021) report"
+    cleaned = cleaned.replace(
+      /(?:[A-Z][a-z]+(?:\s+(?:and|&)\s+[A-Z][a-z]+)?(?:\s+et\s+al\.?)?)\s*\((?:19|20)\d{2}\)\s+(?:found|argue|argues|state|states|suggest|suggests|report|reports|claim|claims|show|shows|demonstrate|demonstrates|note|notes|conclude|concludes|assert|asserts|maintain|maintains|propose|proposes|indicate|indicates|reveal|reveals|observe|observes|highlight|highlights|emphasize|emphasizes|explain|explains|describe|describes|discuss|discusses|mention|mentions)/g,
+      (match) => {
+        // Remove just the citation part "Author (Year)" but keep the reporting verb
+        const citationPart = match.replace(
+          /((?:[A-Z][a-z]+(?:\s+(?:and|&)\s+[A-Z][a-z]+)?(?:\s+et\s+al\.?)?)\s*\((?:19|20)\d{2}\)\s*)/,
+          ''
+        );
+        const beforeVerb = match.replace(citationPart, '');
+        if (beforeVerb.trim().length > 0) {
+          const citationWords = beforeVerb.split(/\s+/).filter(w => w.length > 0);
+          excludedWords += citationWords.length;
+          return citationPart;
+        }
+        return match;
+      }
+    );
+
+    // 5. APA-style editorial markers: (Eds.), (Trans.), (Ed.), (Trans.),
+    cleaned = cleaned.replace(
+      /\(\s*(?:Eds?\.|Trans\.|Rev\.|Comp\.|Eds?,?\s*Trans\.?)\s*\)/gi,
+      (match) => {
+        const words = match.split(/\s+/).filter(w => w.length > 0);
+        excludedWords += words.length;
+        return '';
+      }
+    );
+
+    cleaned = cleaned.replace(/\s+/g, ' ').trim();
+
+    return { cleanedText: cleaned, excludedWordCount: excludedWords };
+  }
+
+  /**
+   * Exclude quoted text and bibliography sections from content.
+   * Returns the cleaned text and the count of excluded words.
+   * (Backward-compatible method that combines quote and bibliography exclusion)
+   */
+  excludeQuotesAndBibliography(text: string): { cleanedText: string; excludedWordCount: number } {
+    const { cleanedText: noQuotes, excludedWordCount: quoteWords } = this.excludeQuotes(text);
+    const { cleanedText: noBiblio, excludedWordCount: biblioWords } = this.excludeBibliography(noQuotes);
+
+    return {
+      cleanedText: noBiblio,
+      excludedWordCount: quoteWords + biblioWords,
+    };
+  }
+
+  /**
+   * Apply all exclusions based on the given settings.
+   * Returns cleaned text and total excluded word count.
+   */
+  applyExclusions(text: string, settings: ExclusionSettings): { cleanedText: string; excludedWordCount: number } {
+    let current = text;
+    let totalExcluded = 0;
+
+    if (settings.excludeQuotes) {
+      const result = this.excludeQuotes(current);
+      current = result.cleanedText;
+      totalExcluded += result.excludedWordCount;
+    }
+
+    if (settings.excludeBibliography) {
+      const result = this.excludeBibliography(current);
+      current = result.cleanedText;
+      totalExcluded += result.excludedWordCount;
+    }
+
+    if (settings.excludeCitations) {
+      const result = this.excludeCitations(current);
+      current = result.cleanedText;
+      totalExcluded += result.excludedWordCount;
+    }
+
+    return { cleanedText: current, excludedWordCount: totalExcluded };
   }
 
   /**
@@ -338,6 +518,94 @@ export class WinnowingEngine {
   }
 
   /**
+   * Compute source-type breakdown and identify primary sources.
+   * Primary sources = top 3 individual sources by matched word count.
+   */
+  private computeSourceTypeBreakdown(
+    sourceBreakdown: SourceBreakdown[],
+    matchedWords: number,
+    totalWords: number,
+  ): { sourceTypeBreakdown: SourceTypeBreakdown; primarySources: SourceBreakdown[] } {
+    const breakdown = emptySourceTypeBreakdown();
+
+    // Calculate per-source-type word counts
+    const internetWords = new Set<number>();
+    const publicationWords = new Set<number>();
+    const studentPaperWords = new Set<number>();
+    const internetSourceIds = new Set<string>();
+    const publicationSourceIds = new Set<string>();
+    const studentPaperSourceIds = new Set<string>();
+
+    for (const source of sourceBreakdown) {
+      const wordSet = new Set<number>();
+      for (const region of source.regions) {
+        for (let w = region.startWordIndex; w <= region.endWordIndex; w++) {
+          wordSet.add(w);
+        }
+      }
+
+      switch (source.sourceType) {
+        case 'internet':
+          for (const w of wordSet) internetWords.add(w);
+          internetSourceIds.add(source.sourceId);
+          break;
+        case 'publication':
+          for (const w of wordSet) publicationWords.add(w);
+          publicationSourceIds.add(source.sourceId);
+          break;
+        case 'student_paper':
+          for (const w of wordSet) studentPaperWords.add(w);
+          studentPaperSourceIds.add(source.sourceId);
+          break;
+      }
+    }
+
+    const base = matchedWords > 0 ? matchedWords : 1;
+
+    breakdown.internet.matchedWords = internetWords.size;
+    breakdown.internet.percentage = Math.round((internetWords.size / base) * 100 * 10) / 10;
+    breakdown.internet.sourceCount = internetSourceIds.size;
+
+    breakdown.publications.matchedWords = publicationWords.size;
+    breakdown.publications.percentage = Math.round((publicationWords.size / base) * 100 * 10) / 10;
+    breakdown.publications.sourceCount = publicationSourceIds.size;
+
+    breakdown.studentPapers.matchedWords = studentPaperWords.size;
+    breakdown.studentPapers.percentage = Math.round((studentPaperWords.size / base) * 100 * 10) / 10;
+    breakdown.studentPapers.sourceCount = studentPaperSourceIds.size;
+
+    // Primary sources: top 3 sources by matched word count
+    // They are already sorted by matchedWords descending
+    const primaryCount = Math.min(3, sourceBreakdown.length);
+    const primarySources: SourceBreakdown[] = [];
+    const primaryWordSet = new Set<number>();
+
+    for (let i = 0; i < primaryCount; i++) {
+      const source = sourceBreakdown[i];
+      if (source.matchedWords <= 0) break;
+
+      primarySources.push({
+        ...source,
+        isPrimary: true,
+      });
+
+      for (const region of source.regions) {
+        for (let w = region.startWordIndex; w <= region.endWordIndex; w++) {
+          primaryWordSet.add(w);
+        }
+      }
+    }
+
+    breakdown.primarySources.matchedWords = primaryWordSet.size;
+    breakdown.primarySources.percentage = totalWords > 0
+      ? Math.round((primaryWordSet.size / totalWords) * 100 * 10) / 10
+      : 0;
+    breakdown.primarySources.sourceCount = primaryCount;
+
+    return { sourceTypeBreakdown: breakdown, primarySources };
+  }
+
+  /**
    * Step 5: Match submitted document fingerprints against the corpus.
    * Uses word-based similarity scoring: (matched words / total words) × 100.
    * Supports per-source scoring with overall deduplication.
@@ -361,8 +629,26 @@ export class WinnowingEngine {
         matchRegions: [],
         flaggedSegments: [],
         matches: [],
+        sourceTypeBreakdown: emptySourceTypeBreakdown(),
+        primarySources: [],
       };
     }
+
+    return this.buildScanResult(fingerprints, words, corpusMatches, excludedWords);
+  }
+
+  /**
+   * Build scan result from fingerprints, words, and corpus matches.
+   * Internal method used by both matchDocument and runFullScan.
+   */
+  private buildScanResult(
+    fingerprints: Fingerprint[],
+    words: string[],
+    corpusMatches: Map<number, CorpusMatchEntry[]>,
+    excludedWords: number,
+    excludeSmallMatches: number = 0,
+  ): ScanResult {
+    const totalWords = words.length;
 
     // Collect raw matches: for each fingerprint that hits the corpus,
     // record the word range it covers in the submitted document
@@ -412,9 +698,16 @@ export class WinnowingEngine {
         wordCount: r.endWordIndex - r.startWordIndex + 1,
       }));
 
+      // Filter out small matches if excludeSmallMatches is set
+      const filteredRegions = excludeSmallMatches > 0
+        ? regionsWithText.filter(r => r.wordCount >= excludeSmallMatches)
+        : regionsWithText;
+
+      if (filteredRegions.length === 0) continue;
+
       // Calculate matched words for this source (deduped within source)
       const matchedWordSet = new Set<number>();
-      for (const region of regionsWithText) {
+      for (const region of filteredRegions) {
         for (let w = region.startWordIndex; w <= region.endWordIndex; w++) {
           matchedWordSet.add(w);
         }
@@ -431,13 +724,13 @@ export class WinnowingEngine {
         sourceTitle: firstMatch.sourceTitle,
         sourceType: firstMatch.sourceType || 'publication',
         sourceUrl: firstMatch.sourceUrl,
-        matchCount: regionsWithText.length,
+        matchCount: filteredRegions.length,
         matchedWords: matchedWordsForSource,
         percentageOfDocument,
-        regions: regionsWithText,
+        regions: filteredRegions,
       });
 
-      allRegions.push(...regionsWithText);
+      allRegions.push(...filteredRegions);
     }
 
     // Overall score: deduplicate across sources
@@ -457,14 +750,32 @@ export class WinnowingEngine {
     // Sort source breakdown by matchedWords descending
     sourceBreakdown.sort((a, b) => b.matchedWords - a.matchedWords);
 
+    // Compute source-type breakdown and identify primary sources
+    const { sourceTypeBreakdown, primarySources } = this.computeSourceTypeBreakdown(
+      sourceBreakdown,
+      matchedWords,
+      totalWords,
+    );
+
+    // Tag primary sources in sourceBreakdown
+    const primarySourceIds = new Set(primarySources.map(ps => ps.sourceId));
+    for (const source of sourceBreakdown) {
+      source.isPrimary = primarySourceIds.has(source.sourceId);
+    }
+
     // Sort match regions by startWordIndex
     allRegions.sort((a, b) => a.startWordIndex - b.startWordIndex);
+
+    // Tag regions that belong to primary sources
+    for (const region of allRegions) {
+      region.isPrimary = primarySourceIds.has(region.sourceId);
+    }
 
     // Build backward-compatible flaggedSegments
     const flaggedSegments: string[] = allRegions.map(r => r.text);
 
     // Build backward-compatible matches (PlagiarismMatch)
-    const matches: PlagiarismMatch[] = allRegions.map((r, idx) => ({
+    const matches: PlagiarismMatch[] = allRegions.map((r) => ({
       text: r.text,
       sourceTitle: r.sourceTitle,
       sourceUrl: r.sourceUrl,
@@ -483,7 +794,60 @@ export class WinnowingEngine {
       matchRegions: allRegions,
       flaggedSegments,
       matches,
+      sourceTypeBreakdown,
+      primarySources,
     };
+  }
+
+  /**
+   * Run a full scan with exclusion settings support (Turnitin-style).
+   * This is the enhanced scan pipeline that supports citation exclusion,
+   * small match filtering, and returns source-type breakdown + primary sources.
+   *
+   * @param submittedText - The raw document text
+   * @param corpusMatches - Pre-computed corpus match map
+   * @param exclusionSettings - Optional exclusion settings (defaults used if not provided)
+   */
+  runFullScan(
+    submittedText: string,
+    corpusMatches: Map<number, CorpusMatchEntry[]>,
+    exclusionSettings?: Partial<ExclusionSettings>,
+  ): ScanResult {
+    const settings: ExclusionSettings = {
+      ...DEFAULT_EXCLUSION_SETTINGS,
+      ...exclusionSettings,
+    };
+
+    // Apply exclusions
+    const { cleanedText, excludedWordCount } = this.applyExclusions(submittedText, settings);
+
+    // Generate fingerprints from cleaned text
+    const fingerprints = this.generateFingerprints(cleanedText);
+    const words = this.splitIntoWords(cleanedText);
+    const totalWords = words.length;
+
+    if (fingerprints.length === 0 || totalWords === 0) {
+      return {
+        overallSimilarity: 0,
+        totalWords,
+        matchedWords: 0,
+        excludedWords: excludedWordCount,
+        sourceBreakdown: [],
+        matchRegions: [],
+        flaggedSegments: [],
+        matches: [],
+        sourceTypeBreakdown: emptySourceTypeBreakdown(),
+        primarySources: [],
+      };
+    }
+
+    return this.buildScanResult(
+      fingerprints,
+      words,
+      corpusMatches,
+      excludedWordCount,
+      settings.excludeSmallMatches,
+    );
   }
 
   /**

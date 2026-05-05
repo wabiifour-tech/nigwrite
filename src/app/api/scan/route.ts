@@ -5,68 +5,332 @@
  *
  * Accepts a document text, runs it through the Winnowing Engine
  * for plagiarism detection (Turnitin-style word-based scoring),
- * AI detection, optional web search, and returns a complete scan report.
+ * AI detection, enhanced web search (multi-query, classified, deep extraction),
+ * and returns a complete scan report.
  *
  * GET /api/scan — Returns scan history
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { WinnowingEngine, type CorpusMatchEntry } from '@/lib/winnowing-engine';
+import { WinnowingEngine, type CorpusMatchEntry, type ExclusionSettings, DEFAULT_EXCLUSION_SETTINGS } from '@/lib/winnowing-engine';
 import { AIDetector } from '@/lib/ai-detector';
 import { getFingerprintStore, type FingerprintEntry } from '@/lib/fingerprint-store';
 import { db } from '@/lib/db';
 import ZAI from 'z-ai-web-dev-sdk';
 
-/**
- * Search the web for matching content using z-ai-web-dev-sdk.
- * Returns additional fingerprint matches found via web search.
- */
-async function searchWebForMatches(text: string): Promise<{
-  text: string;
-  sourceTitle: string;
-  sourceUrl: string;
-}[]> {
+// ═══════════════════════════════════════════════════════════════
+// Web Search Enhancement — Configuration & Types
+// ═══════════════════════════════════════════════════════════════
+
+const WEB_SEARCH_CONFIG = {
+  maxTotalTimeoutMs: 15_000,   // Hard cap on total web search time
+  maxPrimaryQueries: 3,        // 3 diverse queries from the document
+  maxSecondarySearches: 5,     // Up to 5 secondary deep-content searches
+  resultsPerQuery: 5,          // Results per primary query
+  maxContentPerSource: 3000,   // Cap content per source to reduce noise
+  perQueryTimeoutMs: 5000,     // Timeout per individual search call
+};
+
+/** Internal representation of a deduplicated, classified web result. */
+interface ClassifiedWebResult {
+  url: string;
+  title: string;
+  snippet: string;
+  hostname: string;
+  sourceType: 'internet' | 'publication';
+  extraContent: string;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Helper: Find the most unique sentence from the middle 60%
+// ═══════════════════════════════════════════════════════════════
+
+function findMostUniqueSentence(text: string): string {
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 30);
+
+  if (sentences.length === 0) return '';
+  if (sentences.length < 3) return sentences[0] || '';
+
+  // Build word frequency map from the whole document
+  const wordFreq = new Map<string, number>();
+  const allWords = text.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+  for (const word of allWords) {
+    wordFreq.set(word, (wordFreq.get(word) || 0) + 1);
+  }
+  // Consider only sentences from the middle 60% of the document
+  const startIdx = Math.floor(sentences.length * 0.2);
+  const endIdx = Math.ceil(sentences.length * 0.8);
+  const middleSentences = sentences.slice(startIdx, endIdx);
+
+  let bestScore = -1;
+  let bestSentence = '';
+
+  for (const sentence of middleSentences) {
+    const words = sentence.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    let score = 0;
+    for (const word of words) {
+      const freq = wordFreq.get(word) || 1;
+      // Rare words contribute more: longer word × inverse frequency
+      score += word.length * (1 / freq);
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestSentence = sentence;
+    }
+  }
+
+  return bestSentence || sentences[Math.floor(sentences.length / 2)] || '';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Helper: Extract 3 diverse search queries from the document
+// ═══════════════════════════════════════════════════════════════
+
+function extractSearchQueries(text: string): string[] {
+  const queries: string[] = [];
+
+  // 1. First 200 characters (general topic / opening)
+  const firstPart = text.substring(0, 200).trim();
+  if (firstPart.length > 10) {
+    queries.push(firstPart);
+  }
+
+  // 2. Most unique sentence from middle 60%
+  const uniqueSentence = findMostUniqueSentence(text);
+  if (uniqueSentence && uniqueSentence.length > 20) {
+    queries.push(uniqueSentence.substring(0, 200));
+  }
+
+  // 3. Last 200 characters (conclusion area)
+  const lastPart = text.substring(Math.max(0, text.length - 200)).trim();
+  if (lastPart.length > 10 && lastPart !== firstPart) {
+    queries.push(lastPart);
+  }
+
+  return queries;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Helper: Classify web sources by type (internet vs publication)
+// ═══════════════════════════════════════════════════════════════
+
+function classifyWebSource(url: string, snippet: string): 'internet' | 'publication' {
+  const academicDomains = [
+    '.edu', '.ac.', '.gov', 'scholar.google', 'researchgate',
+    'springer', 'elsevier', 'wiley', 'ieee', 'acm', 'nature.com', 'science.org',
+    'jstor', 'tandfonline', 'sagepub', 'mdpi', 'plos', 'bmc', 'frontiersin',
+    'doi.org', 'arxiv.org', 'pubmed', 'ncbi',
+  ];
+
+  const journalIndicators = [
+    'journal', 'proceedings', 'conference', 'paper',
+    'abstract', 'doi', 'issn', 'volume', 'issue', 'pp.', 'pages',
+  ];
+
+  const lowerUrl = url.toLowerCase();
+  const lowerSnippet = (snippet || '').toLowerCase();
+
+  // Check academic domains in URL
+  for (const domain of academicDomains) {
+    if (lowerUrl.includes(domain)) return 'publication';
+  }
+
+  // Check journal indicators in snippet (need ≥2 matches for confidence)
+  let indicatorCount = 0;
+  for (const indicator of journalIndicators) {
+    if (lowerSnippet.includes(indicator)) indicatorCount++;
+  }
+  if (indicatorCount >= 2) return 'publication';
+
+  return 'internet';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Helper: Execute a single web search with timeout
+// ═══════════════════════════════════════════════════════════════
+
+type ZAISdk = Awaited<ReturnType<typeof ZAI.create>>;
+type RawSearchResult = { url?: string; name?: string; snippet?: string; host_name?: string };
+
+async function executeWebSearch(
+  zai: ZAISdk,
+  query: string,
+  num: number,
+  timeoutMs: number,
+): Promise<RawSearchResult[]> {
+  try {
+    const result = await Promise.race([
+      zai.functions.invoke('web_search', { query, num }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Web search timeout')), timeoutMs)
+      ),
+    ]);
+
+    if (Array.isArray(result)) {
+      return result as RawSearchResult[];
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Helper: Extract hostname from URL
+// ═══════════════════════════════════════════════════════════════
+
+function extractHostname(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname;
+  } catch {
+    return url;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Enhanced Web Search — Multi-Query, Classified, Deep Extraction
+//
+// Improvements over the original single-query approach:
+//   A) Multi-Query Search: 3 diverse queries (opening, unique middle, conclusion)
+//   B) Full Snippet Extraction: up to 3000 chars per source via secondary searches
+//   C) Source Type Classification: academic domains/snippets → 'publication'
+//   D) Secondary Targeted Search: "exact phrase" site:hostname for deeper matches
+//   E) Deduplication: same URL never fingerprinted twice
+//
+// Total API calls: max 3 primary + 5 secondary = 8
+// Total timeout: 15 seconds hard cap
+// Graceful degradation: failures are silently skipped
+// ═══════════════════════════════════════════════════════════════
+
+async function searchWebForMatches(
+  text: string,
+  winnowing: WinnowingEngine,
+): Promise<CorpusMatchEntry[]> {
   try {
     const zai = await ZAI.create();
-    const query = text.substring(0, 200).trim();
+    const startTime = Date.now();
+    const cfg = WEB_SEARCH_CONFIG;
 
-    const searchResult = await zai.functions.invoke('web_search', {
-      query,
-      num: 5,
-    });
+    // ── Step 1: Extract 3 diverse search queries ──
+    const queries = extractSearchQueries(text);
+    const queriesToRun = queries.slice(0, cfg.maxPrimaryQueries);
 
-    const results = Array.isArray(searchResult) ? searchResult as Array<{
-      url?: string;
-      name?: string;
-      snippet?: string;
-      host_name?: string;
-    }> : [];
+    if (queriesToRun.length === 0) return [];
 
-    const webMatches: { text: string; sourceTitle: string; sourceUrl: string }[] = [];
+    // ── Step 2: Execute primary searches (up to 3 queries × 5 results = 15 sources) ──
+    const allRawResults: RawSearchResult[] = [];
 
-    for (const result of results.slice(0, 5)) {
-      const url = result.url;
-      const title = result.name || 'Web Source';
+    for (const query of queriesToRun) {
+      const elapsed = Date.now() - startTime;
+      const remaining = cfg.maxTotalTimeoutMs - elapsed;
+      if (remaining <= 0) break;
 
-      if (!url) continue;
+      const perQueryTimeout = Math.min(cfg.perQueryTimeoutMs, remaining);
+      const results = await executeWebSearch(zai, query, cfg.resultsPerQuery, perQueryTimeout);
+      allRawResults.push(...results);
+    }
 
-      try {
-        const fetchedContent = result.snippet || '';
+    // ── Step 3: Deduplicate by URL and classify each source ──
+    const seenUrls = new Set<string>();
+    const uniqueResults: ClassifiedWebResult[] = [];
 
-        if (fetchedContent && typeof fetchedContent === 'string' && fetchedContent.length > 20) {
-          webMatches.push({
-            text: fetchedContent.substring(0, 2000),
-            sourceTitle: title,
-            sourceUrl: url,
-          });
-        }
-      } catch {
-        continue;
+    for (const raw of allRawResults) {
+      const url = raw.url;
+      if (!url || seenUrls.has(url)) continue;
+
+      seenUrls.add(url);
+      const snippet = raw.snippet || '';
+      if (snippet.length < 20) continue;
+
+      uniqueResults.push({
+        url,
+        title: raw.name || 'Web Source',
+        snippet,
+        hostname: raw.host_name || extractHostname(url),
+        sourceType: classifyWebSource(url, snippet),
+        extraContent: '',
+      });
+    }
+
+    if (uniqueResults.length === 0) return [];
+
+    // ── Step 4: Secondary targeted search for deeper content extraction ──
+    // Pick key phrases from different parts of the document
+    const docWords = text.split(/\s+/).filter(w => w.length > 3);
+    const keyPhrases: string[] = [];
+    if (docWords.length >= 5) {
+      const step = Math.max(1, Math.floor(docWords.length / 5));
+      for (let i = 0; i < docWords.length - 4 && keyPhrases.length < 5; i += step) {
+        keyPhrases.push(docWords.slice(i, i + 5).join(' '));
       }
     }
 
-    return webMatches;
+    let secondaryCount = 0;
+    for (const result of uniqueResults) {
+      if (secondaryCount >= cfg.maxSecondarySearches) break;
+
+      const elapsed = Date.now() - startTime;
+      const remaining = cfg.maxTotalTimeoutMs - elapsed;
+      if (remaining <= 1000) break;
+
+      // Build a targeted query: exact phrase + site:hostname
+      const phrase = keyPhrases[secondaryCount % keyPhrases.length];
+      if (!phrase) break;
+
+      const targetedQuery = `"${phrase}" site:${result.hostname}`;
+      const secondaryResults = await executeWebSearch(
+        zai, targetedQuery, 3, Math.min(3000, remaining),
+      );
+
+      // Extract additional snippet content from secondary search
+      let extraText = '';
+      for (const sr of secondaryResults) {
+        if (sr.snippet && sr.snippet.length > 20) {
+          extraText += ' ' + sr.snippet;
+        }
+      }
+
+      // Cap additional content at 1500 characters
+      result.extraContent = extraText.trim().substring(0, 1500);
+      secondaryCount++;
+    }
+
+    // ── Step 5: Combine content, cap per source, fingerprint, return CorpusMatchEntry[] ──
+    const allEntries: CorpusMatchEntry[] = [];
+
+    for (const result of uniqueResults) {
+      // Combine original snippet + extra content from secondary search
+      let combinedText = result.snippet;
+      if (result.extraContent.length > 0) {
+        combinedText = combinedText + ' ' + result.extraContent;
+      }
+
+      // Cap total content per source at maxContentPerSource to avoid noise
+      combinedText = combinedText.substring(0, cfg.maxContentPerSource);
+      if (combinedText.length < 20) continue;
+
+      // Fingerprint the combined content using the winnowing engine
+      const fingerprints = winnowing.generateFingerprints(combinedText);
+
+      for (const fp of fingerprints) {
+        allEntries.push({
+          documentId: `web-${result.url}`,
+          ngram: fp.ngram,
+          sourceTitle: result.title,
+          sourceUrl: result.url,
+          sourceType: result.sourceType,
+          position: fp.position,
+        });
+      }
+    }
+
+    return allEntries;
   } catch {
+    // Any failure in web search → gracefully return empty (local corpus still works)
     return [];
   }
 }
@@ -87,20 +351,30 @@ function toCorpusMatchEntries(entries: FingerprintEntry[]): CorpusMatchEntry[] {
 
 /**
  * The main scan pipeline — runs synchronously and returns the full report.
- * Uses Turnitin-style word-based scoring with quote/bibliography exclusion.
+ * Uses Turnitin-style word-based scoring with exclusion settings,
+ * source-type breakdown, primary sources identification,
+ * enhanced multi-query web search, and dynamic user document indexing.
  */
-async function runScanPipeline(title: string, content: string, userId?: string) {
+async function runScanPipeline(
+  title: string,
+  content: string,
+  userId?: string,
+  exclusionSettings?: Partial<ExclusionSettings>,
+) {
   const winnowing = new WinnowingEngine();
   const aiDetector = new AIDetector();
   const store = getFingerprintStore();
 
-  // ── Stage 1: Exclude quotes and bibliography ──
-  const { cleanedText, excludedWordCount } = winnowing.excludeQuotesAndBibliography(content);
+  const settings: ExclusionSettings = {
+    ...DEFAULT_EXCLUSION_SETTINGS,
+    ...exclusionSettings,
+  };
 
-  // ── Stage 2: Fingerprint the cleaned text ──
+  // ── Stage 1: Fingerprint cleaned text for corpus search ──
+  const { cleanedText, excludedWordCount } = winnowing.applyExclusions(content, settings);
   const fingerprints = winnowing.generateFingerprints(cleanedText);
 
-  // ── Stage 3: Local Corpus Matching ──
+  // ── Stage 2: Local Corpus Matching ──
   const corpusMatchMap = store.search(fingerprints.map(fp => fp.hash));
 
   // Convert to CorpusMatchEntry format
@@ -109,38 +383,34 @@ async function runScanPipeline(title: string, content: string, userId?: string) 
     corpusMatches.set(hash, toCorpusMatchEntries(entries));
   }
 
-  const scanResult = winnowing.matchDocument(cleanedText, corpusMatches, excludedWordCount);
-
-  // ── Stage 4: Web Search (optional, for documents >100 words) ──
+  // ── Stage 3: Enhanced Web Search (optional, for documents >100 words) ──
+  // Multi-query search with source classification and secondary deep extraction.
+  // Max 8 API calls, 15s timeout, graceful degradation on failure.
   let webSourcesSearched = 0;
   const wordCount = content.split(/\s+/).filter(w => w.length > 0).length;
 
+  let combinedMatches = corpusMatches;
+
   if (wordCount > 100) {
     try {
-      const webMatches = await searchWebForMatches(content);
-      webSourcesSearched = webMatches.length;
+      const webEntries = await searchWebForMatches(content, winnowing);
 
-      if (webMatches.length > 0) {
-        // Build web fingerprint entries
+      // Count unique web sources (by documentId)
+      webSourcesSearched = new Set(webEntries.map(e => e.documentId)).size;
+
+      if (webEntries.length > 0) {
+        // Build web fingerprint map from returned CorpusMatchEntry[]
+        // Hash is computed from ngram using the same rabinKarpHash the engine uses
         const webFingerprintEntries = new Map<number, CorpusMatchEntry[]>();
-        for (const wm of webMatches) {
-          const webFingerprints = winnowing.generateFingerprints(wm.text);
-          for (const fp of webFingerprints) {
-            const existing = webFingerprintEntries.get(fp.hash) || [];
-            existing.push({
-              documentId: `web-${wm.sourceUrl}`,
-              ngram: fp.ngram,
-              sourceTitle: wm.sourceTitle,
-              sourceUrl: wm.sourceUrl,
-              sourceType: 'internet' as const,
-              position: fp.position,
-            });
-            webFingerprintEntries.set(fp.hash, existing);
-          }
+        for (const entry of webEntries) {
+          const hash = winnowing.rabinKarpHash(entry.ngram);
+          const existing = webFingerprintEntries.get(hash) || [];
+          existing.push(entry);
+          webFingerprintEntries.set(hash, existing);
         }
 
         // Combine corpus + web matches
-        const combinedMatches = new Map<number, CorpusMatchEntry[]>();
+        combinedMatches = new Map<number, CorpusMatchEntry[]>();
         for (const [hash, entries] of corpusMatches) {
           combinedMatches.set(hash, [...entries]);
         }
@@ -149,22 +419,14 @@ async function runScanPipeline(title: string, content: string, userId?: string) 
           existing.push(...entries);
           combinedMatches.set(hash, existing);
         }
-
-        // Re-run match with combined corpus
-        const combinedResult = winnowing.matchDocument(cleanedText, combinedMatches, excludedWordCount);
-
-        // Use the combined result
-        scanResult.overallSimilarity = combinedResult.overallSimilarity;
-        scanResult.matchedWords = combinedResult.matchedWords;
-        scanResult.sourceBreakdown = combinedResult.sourceBreakdown;
-        scanResult.matchRegions = combinedResult.matchRegions;
-        scanResult.flaggedSegments = combinedResult.flaggedSegments;
-        scanResult.matches = combinedResult.matches;
       }
     } catch {
       // Web search unavailable — continue with local corpus only
     }
   }
+
+  // ── Stage 4: Run Full Scan with Turnitin-style features ──
+  const scanResult = winnowing.runFullScan(content, combinedMatches, settings);
 
   // ── Stage 5: AI Detection ──
   const aiResult = aiDetector.analyzeText(content);
@@ -213,7 +475,20 @@ async function runScanPipeline(title: string, content: string, userId?: string) 
     });
   }
 
-  // Build final result
+  // ── Stage 7: Index user submission for future cross-checking ──
+  try {
+    store.addUserDocument(
+      `user-doc-${document.id}`,
+      title || 'Untitled Document',
+      content,
+      'student_paper',
+    );
+  } catch {
+    // Indexing failure should not block the scan response
+    console.warn('[NigWrite] Failed to index user document for cross-checking');
+  }
+
+  // Build final result with enriched Turnitin-style data
   return {
     reportId: report.id,
     documentId: document.id,
@@ -242,6 +517,7 @@ async function runScanPipeline(title: string, content: string, userId?: string) 
         matchCount: sb.matchCount,
         matchedWords: sb.matchedWords,
         percentageOfDocument: sb.percentageOfDocument,
+        isPrimary: sb.isPrimary,
         regions: sb.regions.map(r => ({
           startWordIndex: r.startWordIndex,
           endWordIndex: r.endWordIndex,
@@ -251,6 +527,7 @@ async function runScanPipeline(title: string, content: string, userId?: string) 
           sourceType: r.sourceType,
           sourceUrl: r.sourceUrl,
           wordCount: r.wordCount,
+          isPrimary: r.isPrimary,
         })),
       })),
       matchRegions: scanResult.matchRegions.map(r => ({
@@ -262,6 +539,19 @@ async function runScanPipeline(title: string, content: string, userId?: string) 
         sourceType: r.sourceType,
         sourceUrl: r.sourceUrl,
         wordCount: r.wordCount,
+        isPrimary: r.isPrimary,
+      })),
+      // New Turnitin-style enriched fields
+      sourceTypeBreakdown: scanResult.sourceTypeBreakdown,
+      primarySources: scanResult.primarySources.map(ps => ({
+        sourceId: ps.sourceId,
+        sourceTitle: ps.sourceTitle,
+        sourceType: ps.sourceType,
+        sourceUrl: ps.sourceUrl,
+        matchCount: ps.matchCount,
+        matchedWords: ps.matchedWords,
+        percentageOfDocument: ps.percentageOfDocument,
+        isPrimary: true,
       })),
     },
     aiDetection: {
@@ -288,10 +578,11 @@ async function runScanPipeline(title: string, content: string, userId?: string) 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { title, content, userId } = body as {
+    const { title, content, userId, exclusionSettings } = body as {
       title?: string;
       content: string;
       userId?: string;
+      exclusionSettings?: Partial<ExclusionSettings>;
     };
 
     if (!content || content.trim().length === 0) {
@@ -302,7 +593,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Run the full scan pipeline synchronously — returns complete report
-    const resultData = await runScanPipeline(title || 'Untitled Document', content, userId);
+    const resultData = await runScanPipeline(
+      title || 'Untitled Document',
+      content,
+      userId,
+      exclusionSettings,
+    );
 
     return NextResponse.json({
       success: true,

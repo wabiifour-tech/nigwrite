@@ -2,16 +2,22 @@
  * NigWrite - Report Export API
  * POST /api/export
  *
- * Exports a scan report as a styled HTML file (printable to PDF from browser).
+ * Exports a scan report as:
+ *   - HTML (printable to PDF from browser)
+ *   - Plain text
+ *   - Highlighted DOCX (Turnitin-style originality report with color-coded matches)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { WinnowingEngine, DEFAULT_EXCLUSION_SETTINGS, type CorpusMatchEntry } from '@/lib/winnowing-engine';
+import { getFingerprintStore, type FingerprintEntry } from '@/lib/fingerprint-store';
+import { generateHighlightedDocument, type HighlightedMatchRegion, type HighlightedSourceBreakdown } from '@/lib/highlighted-doc-generator';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { reportId, format } = body as { reportId: string; format?: 'pdf' | 'text' };
+    const { reportId, format } = body as { reportId: string; format?: 'pdf' | 'text' | 'highlighted_docx' };
 
     if (!reportId) {
       return NextResponse.json({ error: 'reportId is required' }, { status: 400 });
@@ -28,6 +34,11 @@ export async function POST(request: NextRequest) {
 
     if (!report) {
       return NextResponse.json({ error: 'Report not found' }, { status: 404 });
+    }
+
+    // ── Highlighted DOCX export ──
+    if (format === 'highlighted_docx') {
+      return await handleHighlightedDocxExport(report);
     }
 
     if (format === 'text') {
@@ -52,9 +63,115 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Export failed';
+    console.error('[NigWrite] Export error:', message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
+
+// ──────────────────────────────────────────────
+// Highlighted DOCX Export Handler
+// ──────────────────────────────────────────────
+
+async function handleHighlightedDocxExport(report: {
+  id: string;
+  similarityScore: number;
+  aiScore: number;
+  status: string;
+  createdAt: Date;
+  document: { id: string; title: string; contentBody: string; createdAt: Date; userId?: string | null };
+  flaggedSegments: { id: string; segmentText: string; sourceLink: string | null; similarityType: string; createdAt: Date }[];
+}) {
+  const content = report.document.contentBody;
+
+  // Re-run a quick scan against the local corpus to get matchRegions and sourceBreakdown
+  const winnowing = new WinnowingEngine();
+  const store = getFingerprintStore();
+
+  const { cleanedText, excludedWordCount } = winnowing.applyExclusions(content, DEFAULT_EXCLUSION_SETTINGS);
+  const fingerprints = winnowing.generateFingerprints(cleanedText);
+
+  // Search local corpus
+  const corpusMatchMap = store.search(fingerprints.map(fp => fp.hash));
+  const corpusMatches = new Map<number, CorpusMatchEntry[]>();
+  for (const [hash, entries] of corpusMatchMap) {
+    corpusMatches.set(hash, entries.map(e => ({
+      documentId: e.documentId,
+      ngram: e.ngram,
+      sourceTitle: e.sourceTitle,
+      sourceUrl: e.sourceUrl,
+      sourceType: e.sourceType,
+      position: e.position,
+    })));
+  }
+
+  // Run the full scan
+  const scanResult = winnowing.runFullScan(content, corpusMatches, DEFAULT_EXCLUSION_SETTINGS);
+
+  // Map to highlighted doc types
+  const matchRegions: HighlightedMatchRegion[] = scanResult.matchRegions.map(r => ({
+    startWordIndex: r.startWordIndex,
+    endWordIndex: r.endWordIndex,
+    text: r.text,
+    sourceId: r.sourceId,
+    sourceTitle: r.sourceTitle,
+    sourceType: r.sourceType,
+    sourceUrl: r.sourceUrl,
+    wordCount: r.wordCount,
+    isPrimary: r.isPrimary,
+  }));
+
+  const sourceBreakdown: HighlightedSourceBreakdown[] = scanResult.sourceBreakdown.map(sb => ({
+    sourceId: sb.sourceId,
+    sourceTitle: sb.sourceTitle,
+    sourceType: sb.sourceType,
+    sourceUrl: sb.sourceUrl,
+    matchCount: sb.matchCount,
+    matchedWords: sb.matchedWords,
+    percentageOfDocument: sb.percentageOfDocument,
+    isPrimary: sb.isPrimary,
+  }));
+
+  // Get student name if available
+  let studentName: string | undefined;
+  if (report.document.userId) {
+    try {
+      const user = await db.user.findUnique({
+        where: { id: report.document.userId },
+        select: { name: true },
+      });
+      if (user?.name) {
+        studentName = user.name;
+      }
+    } catch {
+      // User not found or error — continue without student name
+    }
+  }
+
+  // Generate the DOCX buffer
+  const buffer = await generateHighlightedDocument({
+    title: report.document.title,
+    content,
+    matchRegions,
+    sourceBreakdown,
+    overallSimilarity: report.similarityScore,
+    aiScore: report.aiScore,
+    studentName,
+    scanDate: new Date(report.createdAt).toLocaleString(),
+  });
+
+  const safeFilename = report.document.title.replace(/[^a-zA-Z0-9._-]/g, '_').substring(0, 100);
+
+  return new NextResponse(new Uint8Array(buffer), {
+    headers: {
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'Content-Disposition': `attachment; filename="${safeFilename}_originality_report.docx"`,
+    },
+  });
+}
+
+// ──────────────────────────────────────────────
+// HTML Report Generator (unchanged)
+// ──────────────────────────────────────────────
 
 function getVerdictLabel(similarityScore: number, aiScore: number): string {
   const maxScore = Math.max(similarityScore, aiScore);
@@ -223,6 +340,10 @@ function generateHTMLReport(report: {
 </body>
 </html>`;
 }
+
+// ──────────────────────────────────────────────
+// Text Report Generator (unchanged)
+// ──────────────────────────────────────────────
 
 function generateTextReport(report: {
   similarityScore: number;
