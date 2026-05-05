@@ -183,11 +183,10 @@ export default function NigWriteApp() {
     setIsScanning(true);
     setScanError('');
     setReportData(null);
-    setScanProgress({ stage: 'initializing', progress: 5, message: 'Starting scan...' });
+    setScanProgress({ stage: 'scanning', progress: 50, message: 'Analyzing document... Please wait.' });
 
     try {
-      // Step 1: POST to start scan — returns scanId immediately
-      const postResponse = await fetch('/api/scan', {
+      const response = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -196,62 +195,18 @@ export default function NigWriteApp() {
         }),
       });
 
-      const postResult = await postResponse.json();
+      const result = await response.json();
 
-      if (!postResult.success || !postResult.scanId) {
-        setScanError(postResult.error || 'Failed to start scan. Please try again.');
-        setIsScanning(false);
-        return;
+      if (result.success && result.data) {
+        setScanProgress({ stage: 'complete', progress: 100, message: 'Scan complete!' });
+        setReportData(result.data);
+        setCurrentView('report');
+      } else {
+        setScanError(result.error || 'Scan failed. Please try again.');
       }
-
-      const scanId = postResult.scanId;
-
-      // Step 2: Poll GET /api/scan?id=scanId until result is ready
-      const maxPolls = 120; // 120 * 1.5s = 3 minutes max
-      for (let poll = 0; poll < maxPolls; poll++) {
-        await new Promise(r => setTimeout(r, 1500));
-
-        try {
-          const res = await fetch(`/api/scan?id=${scanId}`);
-          const data = await res.json();
-
-          // Update progress bar if progress data is available
-          if (data.progress) {
-            setScanProgress({
-              stage: data.progress.stage || '',
-              progress: data.progress.progress || 0,
-              message: data.progress.message || 'Processing...',
-            });
-          }
-
-          // Result is ready!
-          if (data.success && data.data) {
-            setScanProgress({ stage: 'complete', progress: 100, message: 'Scan complete!' });
-            setReportData(data.data);
-            setCurrentView('report');
-            setIsScanning(false);
-            return;
-          }
-
-          // Still processing — keep polling
-          if (data.stillProcessing) {
-            continue;
-          }
-
-          // Error
-          setScanError(data.error || 'Scan failed. Please try again.');
-          setIsScanning(false);
-          return;
-        } catch {
-          // Network hiccup — keep polling
-        }
-      }
-
-      // Timeout
-      setScanError('Scan is taking too long. Please try again.');
-      setIsScanning(false);
     } catch {
       setScanError('Network error. Please check your connection and try again.');
+    } finally {
       setIsScanning(false);
     }
   }, [scanTitle, scanContent]);
@@ -359,86 +314,42 @@ export default function NigWriteApp() {
 
     for (const file of filesToScan) {
       setBatchFiles(prev =>
-        prev.map(f => f.id === file.id ? { ...f, status: 'scanning', progress: 10 } : f)
+        prev.map(f => f.id === file.id ? { ...f, status: 'scanning', progress: 30 } : f)
       );
 
       try {
-        // Step 1: POST to start scan
-        const postRes = await fetch('/api/scan', {
+        const response = await fetch('/api/scan', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title: file.title, content: file.content }),
         });
 
-        const postResult = await postRes.json();
+        const result = await response.json();
+        setBatchFiles(prev =>
+          prev.map(f => f.id === file.id ? { ...f, progress: 80 } : f)
+        );
 
-        if (!postResult.success || !postResult.scanId) {
-          setBatchFiles(prev =>
-            prev.map(f => f.id === file.id
-              ? { ...f, status: 'error', error: postResult.error || 'Failed to start scan' }
-              : f)
-          );
-          continue;
-        }
-
-        const scanId = postResult.scanId;
-
-        // Step 2: Poll GET /api/scan?id=scanId until result is ready
-        let succeeded = false;
-        for (let poll = 0; poll < 120; poll++) {
-          await new Promise(r => setTimeout(r, 1500));
-
-          try {
-            const res = await fetch(`/api/scan?id=${scanId}`);
-            const data = await res.json();
-
-            // Update progress bar
-            if (data.progress) {
-              setBatchFiles(prev =>
-                prev.map(f => f.id === file.id ? { ...f, progress: Math.max(data.progress.progress, 10) } : f)
-              );
-            }
-
-            if (data.success && data.data) {
-              const d = data.data as { plagiarism: { similarityScore: number }; aiDetection: { aiProbability: number }; reportId: string };
-              setBatchFiles(prev =>
-                prev.map(f =>
-                  f.id === file.id
-                    ? {
-                        ...f,
-                        status: 'done',
-                        progress: 100,
-                        similarityScore: d.plagiarism.similarityScore,
-                        aiScore: d.aiDetection.aiProbability,
-                        reportId: d.reportId,
-                      }
-                    : f
-                )
-              );
-              succeeded = true;
-              break;
-            }
-
-            if (data.error && !data.stillProcessing) {
-              setBatchFiles(prev =>
-                prev.map(f => f.id === file.id
-                  ? { ...f, status: 'error', error: data.error || 'Scan failed' }
-                  : f)
-              );
-              break;
-            }
-
-            // stillProcessing — keep polling
-          } catch {
-            // Network hiccup — keep polling
-          }
-        }
-
-        if (!succeeded) {
+        if (result.success && result.data) {
+          const d = result.data as { plagiarism: { similarityScore: number }; aiDetection: { aiProbability: number }; reportId: string };
           setBatchFiles(prev =>
             prev.map(f =>
-              f.id === file.id && f.status === 'scanning'
-                ? { ...f, status: 'error', error: 'Scan timed out' }
+              f.id === file.id
+                ? {
+                    ...f,
+                    status: 'done',
+                    progress: 100,
+                    similarityScore: d.plagiarism.similarityScore,
+                    aiScore: d.aiDetection.aiProbability,
+                    reportId: d.reportId,
+                  }
+                : f
+            )
+          );
+        } else {
+          setBatchFiles(prev =>
+            prev.map(f =>
+              f.id === file.id
+                ? { ...f, status: 'error', error: result.error || 'Scan failed' }
                 : f
             )
           );

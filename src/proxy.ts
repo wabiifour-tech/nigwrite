@@ -2,12 +2,14 @@
  * NigWrite - Rate Limiting Proxy
  * Applies rate limiting to all /api/* routes.
  * Created by: Wabi The Tech Nurse
+ *
+ * Next.js 16 uses "proxy" instead of "middleware".
  */
 
 import { type NextRequest, NextResponse } from "next/server";
 import { rateLimit, getLimitName } from "@/lib/rate-limit";
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   if (!request.nextUrl.pathname.startsWith("/api")) {
     return NextResponse.next();
   }
