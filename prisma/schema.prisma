@@ -1,0 +1,117 @@
+/**
+ * NigWrite Database Schema
+ * Academic Integrity & Writing Assistant Platform
+ * Created by: Wabi The Tech Nurse
+ *
+ * Microservices architecture using Next.js + Prisma ORM.
+ * This schema models the complete data flow for plagiarism detection,
+ * AI content detection, and the plagiarism correction engine.
+ */
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ──────────────────────────────────────────────
+// Developer Metadata
+// Tracks app version and credits the creator
+// ──────────────────────────────────────────────
+model DeveloperMeta {
+  id          String @id @default(cuid())
+  appVersion  String @default("1.0.0")
+  creatorName String @default("Wabi The Tech Nurse")
+  description String @default("NigWrite — Academic Integrity & Writing Assistant Platform")
+  updatedAt   DateTime @updatedAt
+}
+
+// ──────────────────────────────────────────────
+// User Management
+// Users belong to institutions (schools, universities)
+// ──────────────────────────────────────────────
+model User {
+  id           String      @id @default(cuid())
+  email        String      @unique
+  name         String?
+  role         String      @default("student") // student, lecturer, admin
+  institutionId String?
+  institution  Institution? @relation(fields: [institutionId], references: [id])
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  documents    Document[]
+}
+
+// ──────────────────────────────────────────────
+// Institutions (Universities, Schools)
+// ──────────────────────────────────────────────
+model Institution {
+  id          String   @id @default(cuid())
+  name        String
+  domain      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  users       User[]
+}
+
+// ──────────────────────────────────────────────
+// Documents
+// Stores the full content body of uploaded papers
+// ──────────────────────────────────────────────
+model Document {
+  id          String       @id @default(cuid())
+  title       String
+  contentBody String
+  userId      String?
+  user        User?        @relation(fields: [userId], references: [id])
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  reports     ScanReport[]
+}
+
+// ──────────────────────────────────────────────
+// Scan Reports
+// One document can have multiple scan reports
+// (original scan + post-correction re-scan)
+// ──────────────────────────────────────────────
+model ScanReport {
+  id              String           @id @default(cuid())
+  documentId      String
+  document        Document         @relation(fields: [documentId], references: [id])
+  similarityScore Float            @default(0) // 0-100 percentage
+  aiScore         Float            @default(0) // 0-100 percentage
+  status          String           @default("completed") // pending, processing, completed
+  createdAt       DateTime         @default(now())
+  flaggedSegments FlaggedSegment[]
+}
+
+// ──────────────────────────────────────────────
+// Flagged Segments
+// Individual text passages flagged as plagiarized or AI-generated
+// ──────────────────────────────────────────────
+model FlaggedSegment {
+  id              String     @id @default(cuid())
+  reportId        String
+  report          ScanReport @relation(fields: [reportId], references: [id])
+  segmentText     String     // original flagged text
+  sourceLink      String?    // matched source URL (if found)
+  similarityType  String     @default("plagiarism") // plagiarism, ai_generated
+  suggestedRewrite String?   // AI-generated rewrite suggestion
+  rewriteApplied  Boolean    @default(false)
+  createdAt       DateTime   @default(now())
+}
+
+// ──────────────────────────────────────────────
+// Source Documents (Reference Corpus)
+// Pre-loaded documents used as the comparison database
+// ──────────────────────────────────────────────
+model SourceDocument {
+  id        String   @id @default(cuid())
+  title     String
+  content   String
+  sourceUrl String?
+  addedAt   DateTime @default(now())
+}
