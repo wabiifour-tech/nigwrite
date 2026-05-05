@@ -331,17 +331,20 @@ export async function GET(request: NextRequest) {
     // Fetch a specific scan result
     const result = scanResults.get(id);
     if (result) {
-      // Clean up after retrieval (keep for 60 seconds for retries)
-      setTimeout(() => scanResults.delete(id), 60000);
       return NextResponse.json(result);
     }
 
+    // No result yet — check progress
     const progress = scanProgressTracker.get(id);
-    if (progress && progress.stage !== 'complete') {
-      return NextResponse.json({ success: false, stillProcessing: true, progress });
+    if (progress) {
+      return NextResponse.json({
+        success: false,
+        stillProcessing: progress.stage !== 'complete',
+        progress,
+      });
     }
 
-    return NextResponse.json({ success: false, error: 'Scan result not found or expired' }, { status: 404 });
+    return NextResponse.json({ success: false, error: 'Scan not found or expired' }, { status: 404 });
   }
 
   // Get scan history

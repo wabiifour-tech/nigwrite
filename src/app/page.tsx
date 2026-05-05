@@ -183,7 +183,7 @@ export default function NigWriteApp() {
     setIsScanning(true);
     setScanError('');
     setReportData(null);
-    setScanProgress({ stage: 'initializing', progress: 0, message: 'Starting scan...' });
+    setScanProgress({ stage: 'initializing', progress: 5, message: 'Starting scan...' });
 
     try {
       // Step 1: POST to start scan — returns scanId immediately
@@ -206,75 +206,50 @@ export default function NigWriteApp() {
 
       const scanId = postResult.scanId;
 
-      // Step 2: Poll for progress until complete, then fetch the result
-      const pollInterval = setInterval(async () => {
+      // Step 2: Poll GET /api/scan?id=scanId until result is ready
+      const maxPolls = 120; // 120 * 1.5s = 3 minutes max
+      for (let poll = 0; poll < maxPolls; poll++) {
+        await new Promise(r => setTimeout(r, 1500));
+
         try {
-          const progressRes = await fetch(`/api/scan-progress?id=${scanId}`);
-          if (!progressRes.ok) return;
+          const res = await fetch(`/api/scan?id=${scanId}`);
+          const data = await res.json();
 
-          const progressText = await progressRes.text();
-          // SSE: parse the last data line
-          const lines = progressText.split('\n').filter(l => l.startsWith('data: '));
-          if (lines.length === 0) return;
-
-          const lastLine = lines[lines.length - 1].replace('data: ', '');
-          const progress = JSON.parse(lastLine);
-
-          setScanProgress({
-            stage: progress.stage,
-            progress: progress.progress,
-            message: progress.message,
-          });
-
-          if (progress.stage === 'complete') {
-            clearInterval(pollInterval);
-
-            // Step 3: Fetch the completed scan result
-            const maxRetries = 10;
-            for (let attempt = 0; attempt < maxRetries; attempt++) {
-              try {
-                const resultRes = await fetch(`/api/scan?id=${scanId}`);
-                const result = await resultRes.json();
-
-                if (result.success && result.data) {
-                  setReportData(result.data);
-                  setCurrentView('report');
-                  setIsScanning(false);
-                  return;
-                }
-
-                if (result.stillProcessing) {
-                  // Still processing — wait and retry
-                  await new Promise(r => setTimeout(r, 1000));
-                  continue;
-                }
-
-                // Failed
-                setScanError(result.error || 'Scan completed but no result found. Please try again.');
-                setIsScanning(false);
-                return;
-              } catch {
-                await new Promise(r => setTimeout(r, 1000));
-              }
-            }
-
-            setScanError('Scan timed out. Please try again.');
-            setIsScanning(false);
+          // Update progress bar if progress data is available
+          if (data.progress) {
+            setScanProgress({
+              stage: data.progress.stage || '',
+              progress: data.progress.progress || 0,
+              message: data.progress.message || 'Processing...',
+            });
           }
-        } catch {
-          // Poll error — keep trying
-        }
-      }, 500);
 
-      // Safety timeout: stop polling after 3 minutes
-      setTimeout(() => {
-        clearInterval(pollInterval);
-        if (isScanning) {
-          setScanError('Scan timed out. Please try again.');
+          // Result is ready!
+          if (data.success && data.data) {
+            setScanProgress({ stage: 'complete', progress: 100, message: 'Scan complete!' });
+            setReportData(data.data);
+            setCurrentView('report');
+            setIsScanning(false);
+            return;
+          }
+
+          // Still processing — keep polling
+          if (data.stillProcessing) {
+            continue;
+          }
+
+          // Error
+          setScanError(data.error || 'Scan failed. Please try again.');
           setIsScanning(false);
+          return;
+        } catch {
+          // Network hiccup — keep polling
         }
-      }, 180000);
+      }
 
+      // Timeout
+      setScanError('Scan is taking too long. Please try again.');
+      setIsScanning(false);
     } catch {
       setScanError('Network error. Please check your connection and try again.');
       setIsScanning(false);
@@ -383,7 +358,6 @@ export default function NigWriteApp() {
     setIsBatchScanning(true);
 
     for (const file of filesToScan) {
-      // Mark as scanning
       setBatchFiles(prev =>
         prev.map(f => f.id === file.id ? { ...f, status: 'scanning', progress: 10 } : f)
       );
@@ -408,82 +382,63 @@ export default function NigWriteApp() {
         }
 
         const scanId = postResult.scanId;
-        setBatchFiles(prev =>
-          prev.map(f => f.id === file.id ? { ...f, progress: 30 } : f)
-        );
 
-        // Step 2: Poll for progress
-        const result = await new Promise<{ success: boolean; data?: unknown; error?: string }>((resolve) => {
-          const poll = setInterval(async () => {
-            try {
-              const progressRes = await fetch(`/api/scan-progress?id=${scanId}`);
-              if (!progressRes.ok) return;
-              const text = await progressRes.text();
-              const lines = text.split('\n').filter(l => l.startsWith('data: '));
-              if (lines.length === 0) return;
+        // Step 2: Poll GET /api/scan?id=scanId until result is ready
+        let succeeded = false;
+        for (let poll = 0; poll < 120; poll++) {
+          await new Promise(r => setTimeout(r, 1500));
 
-              const lastLine = lines[lines.length - 1].replace('data: ', '');
-              const progress = JSON.parse(lastLine);
+          try {
+            const res = await fetch(`/api/scan?id=${scanId}`);
+            const data = await res.json();
 
-              // Update batch file progress
-              const pct = progress.progress;
+            // Update progress bar
+            if (data.progress) {
               setBatchFiles(prev =>
-                prev.map(f => f.id === file.id ? { ...f, progress: Math.max(pct, 30) } : f)
+                prev.map(f => f.id === file.id ? { ...f, progress: Math.max(data.progress.progress, 10) } : f)
               );
+            }
 
-              if (progress.stage === 'complete') {
-                clearInterval(poll);
+            if (data.success && data.data) {
+              const d = data.data as { plagiarism: { similarityScore: number }; aiDetection: { aiProbability: number }; reportId: string };
+              setBatchFiles(prev =>
+                prev.map(f =>
+                  f.id === file.id
+                    ? {
+                        ...f,
+                        status: 'done',
+                        progress: 100,
+                        similarityScore: d.plagiarism.similarityScore,
+                        aiScore: d.aiDetection.aiProbability,
+                        reportId: d.reportId,
+                      }
+                    : f
+                )
+              );
+              succeeded = true;
+              break;
+            }
 
-                // Fetch result
-                for (let retry = 0; retry < 10; retry++) {
-                  try {
-                    const res = await fetch(`/api/scan?id=${scanId}`);
-                    const data = await res.json();
-                    if (data.success && data.data) {
-                      resolve({ success: true, data: data.data });
-                      return;
-                    }
-                    if (data.stillProcessing) {
-                      await new Promise(r => setTimeout(r, 1000));
-                      continue;
-                    }
-                    resolve({ success: false, error: data.error || 'Scan failed' });
-                    return;
-                  } catch { await new Promise(r => setTimeout(r, 1000)); }
-                }
-                resolve({ success: false, error: 'Scan timed out' });
-              }
-            } catch { /* keep polling */ }
-          }, 500);
+            if (data.error && !data.stillProcessing) {
+              setBatchFiles(prev =>
+                prev.map(f => f.id === file.id
+                  ? { ...f, status: 'error', error: data.error || 'Scan failed' }
+                  : f)
+              );
+              break;
+            }
 
-          // Safety timeout
-          setTimeout(() => {
-            clearInterval(poll);
-            resolve({ success: false, error: 'Timed out' });
-          }, 180000);
-        });
+            // stillProcessing — keep polling
+          } catch {
+            // Network hiccup — keep polling
+          }
+        }
 
-        if (result.success && result.data) {
-          const d = result.data as { plagiarism: { similarityScore: number }; aiDetection: { aiProbability: number }; reportId: string };
+        if (!succeeded) {
           setBatchFiles(prev =>
             prev.map(f =>
-              f.id === file.id
-                ? {
-                    ...f,
-                    status: 'done',
-                    progress: 100,
-                    similarityScore: d.plagiarism.similarityScore,
-                    aiScore: d.aiDetection.aiProbability,
-                    reportId: d.reportId,
-                  }
-                : f
-            )
-          );
-        } else {
-          setBatchFiles(prev =>
-            prev.map(f =>
-              f.id === file.id
-                ? { ...f, status: 'error', error: result.error || 'Scan failed' }
+              f.id === file.id && f.status === 'scanning'
+                ? { ...f, status: 'error', error: 'Scan timed out' }
                 : f
             )
           );
