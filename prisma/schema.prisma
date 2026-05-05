@@ -34,15 +34,19 @@ model DeveloperMeta {
 // Users belong to institutions (schools, universities)
 // ──────────────────────────────────────────────
 model User {
-  id           String      @id @default(cuid())
-  email        String      @unique
-  name         String?
-  role         String      @default("student") // student, lecturer, admin
+  id            String       @id @default(cuid())
+  email         String       @unique
+  name          String?
+  password      String       // hashed password (bcryptjs)
+  role          String       @default("student") // student, lecturer, admin
   institutionId String?
-  institution  Institution? @relation(fields: [institutionId], references: [id])
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
-  documents    Document[]
+  institution   Institution? @relation(fields: [institutionId], references: [id])
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  documents     Document[]
+  assignments   Assignment[]
+  submissions  Submission[]
+  notifications Notification[]
 }
 
 // ──────────────────────────────────────────────
@@ -55,6 +59,7 @@ model Institution {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   users       User[]
+  assignments Assignment[]
 }
 
 // ──────────────────────────────────────────────
@@ -69,7 +74,8 @@ model Document {
   user        User?        @relation(fields: [userId], references: [id])
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
-  reports     ScanReport[]
+  reports      ScanReport[]
+  submissions  Submission[]
 }
 
 // ──────────────────────────────────────────────
@@ -86,6 +92,7 @@ model ScanReport {
   status          String           @default("completed") // pending, processing, completed
   createdAt       DateTime         @default(now())
   flaggedSegments FlaggedSegment[]
+  submission    Submission?
 }
 
 // ──────────────────────────────────────────────
@@ -114,4 +121,56 @@ model SourceDocument {
   content   String
   sourceUrl String?
   addedAt   DateTime @default(now())
+}
+
+// ──────────────────────────────────────────────
+// Assignments (Instructor-created tasks)
+// ──────────────────────────────────────────────
+model Assignment {
+  id            String       @id @default(cuid())
+  title         String
+  description   String
+  courseId      String?
+  institutionId String?
+  institution   Institution? @relation(fields: [institutionId], references: [id])
+  createdBy     String
+  creator       User         @relation(fields: [createdBy], references: [id])
+  deadline      DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  submissions   Submission[]
+}
+
+// ──────────────────────────────────────────────
+// Submissions (Student submissions to assignments)
+// ──────────────────────────────────────────────
+model Submission {
+  id           String     @id @default(cuid())
+  assignmentId String
+  assignment   Assignment @relation(fields: [assignmentId], references: [id])
+  studentId    String?
+  student      User?      @relation(fields: [studentId], references: [id])
+  documentId   String
+  document     Document   @relation(fields: [documentId], references: [id])
+  reportId     String?    @unique
+  report       ScanReport? @relation(fields: [reportId], references: [id])
+  status       String     @default("submitted") // submitted, graded, flagged
+  grade        String?
+  feedback     String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+// ──────────────────────────────────────────────
+// Notifications
+// ──────────────────────────────────────────────
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  title     String
+  message   String
+  type      String   @default("info") // info, warning, success, error
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
 }

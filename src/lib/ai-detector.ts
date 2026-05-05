@@ -23,6 +23,14 @@
  * This implementation uses lightweight statistical heuristics for demonstration.
  */
 
+export interface AISentenceResult {
+  sentence: string;
+  aiScore: number;
+  startOffset: number;
+  endOffset: number;
+  isFlagged: boolean;
+}
+
 export interface AIDetectionResult {
   aiProbability: number;         // 0-100 percentage
   perplexityScore: number;       // Lower = more likely AI-generated
@@ -121,6 +129,80 @@ export class AIDetector {
       confidence,
       indicators,
     };
+  }
+
+  /**
+   * Analyze text for AI-generated content on a per-sentence basis.
+   * Returns an array of results with individual AI scores and offsets.
+   * A sentence is flagged as AI if its individual score > 60.
+   */
+  analyzeBySentence(text: string): AISentenceResult[] {
+    if (!text || text.trim().length === 0) {
+      return [];
+    }
+
+    const sentences = text.match(/[^.!?]+[.!?]+/g) || text.split(/\n+/).filter(s => s.trim().length > 10);
+    if (sentences.length === 0) {
+      return [];
+    }
+
+    const results: AISentenceResult[] = [];
+    let currentOffset = 0;
+
+    for (const rawSentence of sentences) {
+      const trimmed = rawSentence.trim();
+      if (trimmed.length < 10) {
+        currentOffset += rawSentence.length;
+        continue;
+      }
+
+      // Find the actual position in the original text
+      const startOffset = text.indexOf(trimmed, currentOffset);
+      const endOffset = startOffset + trimmed.length;
+      currentOffset = endOffset;
+
+      if (startOffset === -1) continue;
+
+      const words = this.tokenizeWords(trimmed);
+      if (words.length < 5) {
+        results.push({
+          sentence: trimmed,
+          aiScore: 0,
+          startOffset,
+          endOffset,
+          isFlagged: false,
+        });
+        continue;
+      }
+
+      const subSentences = [trimmed];
+      const perplexity = this.calculatePerplexity(words);
+      const burstiness = this.calculateBurstiness(subSentences);
+      const vocabDiversity = this.calculateVocabularyDiversity(words);
+      const avgSentenceLen = words.length;
+      const llmPhrases = this.detectLLMPhrases(trimmed);
+
+      const aiScore = this.calculateAIProbability({
+        perplexity,
+        burstiness,
+        vocabDiversity,
+        avgSentenceLen,
+        sentenceVariance: 0,
+        llmPhraseCount: llmPhrases.length,
+      });
+
+      const isFlagged = aiScore > 60;
+
+      results.push({
+        sentence: trimmed,
+        aiScore: Math.round(aiScore),
+        startOffset,
+        endOffset,
+        isFlagged,
+      });
+    }
+
+    return results;
   }
 
   /**

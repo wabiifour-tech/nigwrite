@@ -8,20 +8,25 @@
  * using perplexity, burstiness, and vocabulary diversity metrics.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { AIDetector } from '@/lib/ai-detector';
+import { NextRequest, NextResponse } from "next/server";
+import { AIDetector } from "@/lib/ai-detector";
+import { aiDetectSchema, formatValidationErrors } from "@/lib/validations";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { content } = body as { content: string };
 
-    if (!content || content.trim().length === 0) {
+    // Validate with Zod
+    const validation = aiDetectSchema.safeParse(body);
+    if (!validation.success) {
+      const errors = formatValidationErrors(validation.error);
       return NextResponse.json(
-        { error: 'Text content is required for AI detection' },
+        { error: "Validation failed", details: errors },
         { status: 400 }
       );
     }
+
+    const { content } = validation.data;
 
     const detector = new AIDetector();
     const result = detector.analyzeText(content);
@@ -31,7 +36,8 @@ export async function POST(request: NextRequest) {
       data: result,
     });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'AI detection failed';
+    const message =
+      error instanceof Error ? error.message : "AI detection failed";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

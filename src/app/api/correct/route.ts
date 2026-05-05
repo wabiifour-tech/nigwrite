@@ -7,27 +7,28 @@
  * and returns a rewritten version. Then automatically re-scans to verify.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { CorrectionService } from '@/lib/correction-service';
-import { WinnowingEngine } from '@/lib/winnowing-engine';
-import { getFingerprintStore } from '@/lib/fingerprint-store';
+import { NextRequest, NextResponse } from "next/server";
+import { CorrectionService } from "@/lib/correction-service";
+import { WinnowingEngine } from "@/lib/winnowing-engine";
+import { getFingerprintStore } from "@/lib/fingerprint-store";
+import { correctSchema, formatValidationErrors } from "@/lib/validations";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { flaggedText, documentContent, documentTitle, reportId } = body as {
-      flaggedText: string;
-      documentContent?: string;
-      documentTitle?: string;
-      reportId?: string;
-    };
 
-    if (!flaggedText || flaggedText.trim().length === 0) {
+    // Validate with Zod
+    const validation = correctSchema.safeParse(body);
+    if (!validation.success) {
+      const errors = formatValidationErrors(validation.error);
       return NextResponse.json(
-        { error: 'Flagged text is required' },
+        { error: "Validation failed", details: errors },
         { status: 400 }
       );
     }
+
+    const { flaggedText, documentContent, documentTitle, reportId } =
+      validation.data;
 
     // Step 1: Rewrite using LLM
     const correctionService = new CorrectionService();
@@ -37,7 +38,7 @@ export async function POST(request: NextRequest) {
       documentTitle,
     });
 
-    if (correctionResult.status !== 'success') {
+    if (correctionResult.status !== "success") {
       return NextResponse.json({
         success: false,
         error: correctionResult.message,
@@ -51,18 +52,26 @@ export async function POST(request: NextRequest) {
 
     // Get original similarity for comparison
     const originalFingerprints = winnowing.generateFingerprints(flaggedText);
-    const originalMatches = store.search(originalFingerprints.map(fp => fp.hash));
+    const originalMatches = store.search(
+      originalFingerprints.map((fp) => fp.hash)
+    );
     const originalScan = winnowing.matchDocument(flaggedText, originalMatches);
 
     // Get new similarity for the rewritten text
-    const newFingerprints = winnowing.generateFingerprints(correctionResult.rewrittenText);
-    const newMatches = store.search(newFingerprints.map(fp => fp.hash));
-    const newScan = winnowing.matchDocument(correctionResult.rewrittenText, newMatches);
+    const newFingerprints = winnowing.generateFingerprints(
+      correctionResult.rewrittenText
+    );
+    const newMatches = store.search(newFingerprints.map((fp) => fp.hash));
+    const newScan = winnowing.matchDocument(
+      correctionResult.rewrittenText,
+      newMatches
+    );
 
     // Step 3: Update the correction result with scores
     correctionResult.originalScore = originalScan.overallSimilarity;
     correctionResult.newScore = newScan.overallSimilarity;
-    correctionResult.improvement = originalScan.overallSimilarity - newScan.overallSimilarity;
+    correctionResult.improvement =
+      originalScan.overallSimilarity - newScan.overallSimilarity;
 
     // Update message based on improvement
     if (correctionResult.improvement > 20) {
@@ -80,10 +89,8 @@ export async function POST(request: NextRequest) {
       data: correctionResult,
     });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Correction failed';
-    return NextResponse.json(
-      { error: message },
-      { status: 500 }
-    );
+    const message =
+      error instanceof Error ? error.message : "Correction failed";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

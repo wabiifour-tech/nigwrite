@@ -3,8 +3,8 @@
  * Created by: Wabi The Tech Nurse
  *
  * Displays the full plagiarism report with highlighted text segments,
- * match details, and integrated "Fix This" rewrite buttons.
- * This is the core UI component of the NigWrite platform.
+ * match details, integrated "Fix This" rewrite buttons, and per-sentence
+ * AI content analysis with visual probability bars.
  */
 
 'use client';
@@ -19,10 +19,12 @@ import {
   ChevronUp,
   RefreshCw,
   Copy,
+  Bot,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
 import { ScoreGauge } from '@/components/ScoreGauge';
 
 // Types matching the API response
@@ -31,6 +33,14 @@ interface MatchDetail {
   sourceTitle: string;
   sourceUrl?: string;
   contribution: number;
+}
+
+interface AISentence {
+  sentence: string;
+  aiScore: number;
+  startOffset: number;
+  endOffset: number;
+  isFlagged: boolean;
 }
 
 interface AIDetectionData {
@@ -42,6 +52,7 @@ interface AIDetectionData {
   sentenceLengthVariance: number;
   confidence: 'low' | 'medium' | 'high';
   indicators: string[];
+  sentences?: AISentence[];
 }
 
 interface Verdict {
@@ -62,6 +73,7 @@ interface ReportData {
     matchingFingerprints: number;
     flaggedSegments: string[];
     matches: MatchDetail[];
+    webSourcesSearched?: number;
   };
   aiDetection: AIDetectionData;
   verdict: Verdict;
@@ -84,9 +96,34 @@ interface SegmentRewriteState {
   error?: string;
 }
 
+function getAIScoreColor(score: number): string {
+  if (score < 30) return 'bg-emerald-500';
+  if (score < 50) return 'bg-amber-500';
+  if (score < 70) return 'bg-orange-500';
+  return 'bg-red-500';
+}
+
+function getAIScoreBadgeColor(score: number): string {
+  if (score < 30) return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+  if (score < 50) return 'bg-amber-100 text-amber-700 border-amber-200';
+  if (score < 70) return 'bg-orange-100 text-orange-700 border-orange-200';
+  return 'bg-red-100 text-red-700 border-red-200';
+}
+
+function getAIScoreTextColor(score: number): string {
+  if (score < 30) return 'text-emerald-600';
+  if (score < 50) return 'text-amber-600';
+  if (score < 70) return 'text-orange-600';
+  return 'text-red-600';
+}
+
 export function PlagiarismReport({ report, documentContent }: PlagiarismReportProps) {
   const [segmentStates, setSegmentStates] = useState<Map<string, SegmentRewriteState>>(new Map());
   const [expandedMatches, setExpandedMatches] = useState<Set<number>>(new Set());
+  const [showAllSentences, setShowAllSentences] = useState(false);
+
+  const flaggedSentences = (report.aiDetection.sentences || []).filter(s => s.isFlagged);
+  const displaySentences = showAllSentences ? flaggedSentences : flaggedSentences.slice(0, 5);
 
   const handleRewrite = async (segmentText: string, index: number) => {
     const key = `seg-${index}`;
@@ -278,7 +315,7 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
               AI Content Analysis
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
               <div className="p-2 rounded-lg bg-muted/50">
                 <span className="text-muted-foreground">Word Predictability: </span>
@@ -293,6 +330,72 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
                 <span className="font-semibold">{(report.aiDetection.vocabularyDiversity * 100).toFixed(1)}%</span>
               </div>
             </div>
+
+            {/* Per-Sentence AI Highlighting */}
+            {flaggedSentences.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold flex items-center gap-2">
+                    <Bot className="h-4 w-4 text-purple-500" />
+                    Flagged Sentences ({flaggedSentences.length})
+                  </h4>
+                  {flaggedSentences.length > 5 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setShowAllSentences(!showAllSentences)}
+                    >
+                      {showAllSentences ? 'Show Less' : `Show All ${flaggedSentences.length}`}
+                      {showAllSentences ? <ChevronUp className="h-3 w-3 ml-1" /> : <ChevronDown className="h-3 w-3 ml-1" />}
+                    </Button>
+                  )}
+                </div>
+
+                <div className="space-y-2 max-h-[500px] overflow-y-auto">
+                  {displaySentences.map((sentence, i) => (
+                    <div
+                      key={i}
+                      className="p-3 rounded-lg border border-l-4 transition-colors"
+                      style={{
+                        borderLeftColor: sentence.aiScore >= 70 ? '#ef4444' :
+                                        sentence.aiScore >= 50 ? '#f97316' :
+                                        '#eab308',
+                      }}
+                    >
+                      <p className="text-sm text-gray-800 leading-relaxed mb-2">
+                        &quot;{sentence.sentence}&quot;
+                      </p>
+                      <div className="flex items-center gap-3">
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs text-muted-foreground">AI Probability</span>
+                            <span className={`text-xs font-bold ${getAIScoreTextColor(sentence.aiScore)}`}>
+                              {sentence.aiScore}%
+                            </span>
+                          </div>
+                          <div className="h-2 rounded-full bg-muted overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-500 ${getAIScoreColor(sentence.aiScore)}`}
+                              style={{ width: `${Math.min(sentence.aiScore, 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                        <Badge
+                          className={`${getAIScoreBadgeColor(sentence.aiScore)} text-xs shrink-0`}
+                          variant="outline"
+                        >
+                          {sentence.aiScore >= 70 ? 'High Risk' :
+                           sentence.aiScore >= 50 ? 'Suspicious' : 'Moderate'}
+                        </Badge>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Document-level indicators */}
             <div className="space-y-1.5">
               {report.aiDetection.indicators.map((indicator, i) => (
                 <p key={i} className="text-xs text-muted-foreground flex items-start gap-2">
@@ -312,6 +415,11 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
             <CardTitle className="text-base flex items-center gap-2">
               <ExternalLink className="h-4 w-4" />
               Source Matches ({report.plagiarism.matches.length})
+              {report.plagiarism.webSourcesSearched !== undefined && report.plagiarism.webSourcesSearched > 0 && (
+                <Badge variant="secondary" className="text-xs ml-1">
+                  +{report.plagiarism.webSourcesSearched} web sources
+                </Badge>
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">

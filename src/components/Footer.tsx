@@ -3,15 +3,18 @@
  * Created by: Wabi The Tech Nurse
  *
  * Application footer with Nigeria-themed branding and credits.
- * Must appear on every page of the application.
+ * Shows Sign In link when user is not authenticated.
  */
 
 'use client';
 
-import { PenTool, Heart } from 'lucide-react';
+import Link from 'next/link';
+import { useSession } from 'next-auth/react';
+import { PenTool, Heart, LogIn } from 'lucide-react';
 
 export function Footer() {
   const currentYear = new Date().getFullYear();
+  const { data: session, status } = useSession();
 
   return (
     <footer className="border-t bg-muted/30">
@@ -38,13 +41,24 @@ export function Footer() {
             </span>
           </div>
 
-          {/* Creator Credit */}
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <span>Powered by</span>
-            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#008751]/10 border border-[#008751]/20">
-              <span className="font-semibold text-[#008751] text-xs">
-                Wabi The Tech Nurse
-              </span>
+          {/* Center: Sign In link or Creator Credit */}
+          <div className="flex items-center gap-4">
+            {status === 'loading' ? null : !session?.user ? (
+              <Link
+                href="/login"
+                className="flex items-center gap-1.5 text-sm text-[#008751] hover:text-[#006b40] transition-colors font-medium"
+              >
+                <LogIn className="h-3.5 w-3.5" />
+                Sign In
+              </Link>
+            ) : null}
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span>Powered by</span>
+              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#008751]/10 border border-[#008751]/20">
+                <span className="font-semibold text-[#008751] text-xs">
+                  Wabi The Tech Nurse
+                </span>
+              </div>
             </div>
           </div>
 
