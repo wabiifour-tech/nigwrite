@@ -48,3 +48,21 @@ Stage Summary:
 - Dev server: running and responding (HTTP 200)
 - All advanced features from the audit are now implemented
 - The app went from ~2.3/10 to ~8.5/10 on the quality scorecard
+
+---
+Task ID: 7
+Agent: Super Z (Main)
+Task: Add download buttons across the app
+
+Work Log:
+- Added `Download` and `FileDown` icon imports to page.tsx
+- Created `handleDownloadReport` callback in main app component for HTML report download
+- Added download icon button to each scan history item in the Dashboard view
+- Added download icon button to each completed batch scan item in BatchScanProgress component
+- Imported `Button` and `Download` icon in BatchScanProgress.tsx
+- Verified build passes clean with zero errors
+
+Stage Summary:
+- Download buttons now appear on: Dashboard history items, Batch scan completed items, Report view (already existed via ExportButton)
+- All download buttons trigger the /api/export endpoint to generate a styled HTML report
+- Build passes clean

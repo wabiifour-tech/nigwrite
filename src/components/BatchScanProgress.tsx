@@ -5,8 +5,9 @@
 
 'use client';
 
-import { CheckCircle2, Clock, Loader2, AlertCircle, FileText } from 'lucide-react';
+import { CheckCircle2, Clock, Loader2, AlertCircle, FileText, Download } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
+import { Button } from '@/components/ui/button';
 
 export interface BatchFileItem {
   id: string;
@@ -133,6 +134,39 @@ export function BatchScanProgress({ files }: BatchScanProgressProps) {
                 <p className="text-xs text-red-500 mt-1">{file.error}</p>
               )}
             </div>
+
+            {/* Download button for completed files */}
+            {file.status === 'done' && file.reportId && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-[#008751] hover:bg-[#008751]/10"
+                onClick={async () => {
+                  try {
+                    const response = await fetch('/api/export', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ reportId: file.reportId, format: 'html' }),
+                    });
+                    if (!response.ok) return;
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `NigWrite-Report-${file.name.replace(/[^a-zA-Z0-9]/g, '-')}.html`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  } catch {
+                    // silent
+                  }
+                }}
+                title="Download Report"
+              >
+                <Download className="h-4 w-4" />
+              </Button>
+            )}
           </div>
         ))}
       </div>

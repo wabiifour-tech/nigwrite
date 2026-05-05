@@ -57,6 +57,8 @@ import {
   Send,
   BookOpen,
   ClipboardList,
+  Download,
+  FileDown,
 } from 'lucide-react';
 
 // ──────────────────────────────────────────────
@@ -370,6 +372,31 @@ export default function NigWriteApp() {
 
     setIsBatchScanning(false);
   }, [batchFiles]);
+
+  // ──────────────────────────────────────────────
+  // Download handler
+  // ──────────────────────────────────────────────
+  const handleDownloadReport = useCallback(async (reportId: string, title: string) => {
+    try {
+      const response = await fetch('/api/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportId, format: 'html' }),
+      });
+      if (!response.ok) throw new Error('Export failed');
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `NigWrite-Report-${title.replace(/[^a-zA-Z0-9]/g, '-')}.html`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      // silent fail
+    }
+  }, []);
 
   const handleDropZoneUpload = useCallback(() => {
     fileInputRef.current?.click();
@@ -1004,6 +1031,18 @@ export default function NigWriteApp() {
                       <Badge variant="outline" className="text-xs">
                         {item.flaggedSegments?.length || 0} flags
                       </Badge>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 shrink-0 text-muted-foreground hover:text-[#008751] hover:bg-[#008751]/10"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDownloadReport(item.id, item.document?.title || 'Report');
+                        }}
+                        title="Download Report"
+                      >
+                        <Download className="h-4 w-4" />
+                      </Button>
                     </div>
                   </div>
                 ))}
