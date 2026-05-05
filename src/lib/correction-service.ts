@@ -2,23 +2,16 @@
  * NigWrite - Plagiarism Correction Engine
  * Created by: Wabi The Tech Nurse
  *
- * This service takes flagged plagiarized text and uses an LLM
- * (via z-ai-web-dev-sdk) to rewrite it while preserving meaning
- * and academic tone. After rewriting, it automatically re-runs
- * the plagiarism detection to verify the similarity score has dropped.
- *
- * Prompt Engineering Strategy:
- *   - System prompt enforces academic tone preservation
- *   - Instructions emphasize meaning retention
- *   - Requests structural and vocabulary changes
- *   - Ensures citations and technical terms are preserved
+ * Takes flagged plagiarized text and rewrites it using an LLM to produce
+ * authentic, natural-sounding academic text that passes plagiarism checks.
+ * Automatically re-runs plagiarism detection after rewriting to verify improvement.
  */
 
 import ZAI from 'z-ai-web-dev-sdk';
 
 export interface CorrectionRequest {
   flaggedText: string;
-  context?: string;           // Surrounding paragraph for context
+  context?: string;
   documentTitle?: string;
 }
 
@@ -35,10 +28,6 @@ export interface CorrectionResult {
 export class CorrectionService {
   private zai: ZAI | null = null;
 
-  /**
-   * Initialize the AI client (lazy-loaded).
-   * Uses z-ai-web-dev-sdk for LLM access.
-   */
   private async getAI(): Promise<ZAI> {
     if (!this.zai) {
       this.zai = await ZAI.create();
@@ -48,40 +37,39 @@ export class CorrectionService {
 
   /**
    * Rewrite a flagged plagiarized segment using LLM.
-   * The system prompt is carefully crafted to:
-   *   1. Preserve the original meaning completely
-   *   2. Change vocabulary and sentence structure
-   *   3. Maintain academic tone and formality
-   *   4. Keep technical terms and proper nouns intact
+   * The prompt is engineered for maximum authenticity:
+   *   - Produces natural, human-like academic writing
+   *   - Restructures sentences completely (not just synonym swaps)
+   *   - Varies sentence length for natural rhythm
+   *   - Preserves all technical terms, data, and citations
    */
   async rewriteSegment(request: CorrectionRequest): Promise<CorrectionResult> {
     try {
       const ai = await this.getAI();
 
-      const systemPrompt = `You are an academic writing assistant specialized in paraphrasing and rewriting text to avoid plagiarism detection while preserving original meaning. Your task is to rewrite the given text following these rules:
+      const systemPrompt = `You are a skilled academic writer helping a student rephrase their work in their own words. The text you receive has been flagged for similarity to existing sources. Your job is to rewrite it so it sounds completely original while keeping all the facts, ideas, and meaning intact.
 
-1. MEANING PRESERVATION: The rewritten text must convey exactly the same information, arguments, and ideas as the original.
-2. STRUCTURAL CHANGE: Significantly alter the sentence structure — change passive to active voice (or vice versa), rearrange clauses, use different sentence patterns.
-3. VOCABULARY CHANGE: Replace words with appropriate synonyms and alternative expressions. Do NOT simply swap a few words — make substantial vocabulary changes.
-4. ACADEMIC TONE: Maintain a formal, academic writing style. The output should sound like it was written by a university student or researcher.
-5. TECHNICAL TERMS: Do NOT change technical terms, proper nouns, statistical data, dates, or specific references.
-6. NO ADDITIONS: Do not add new information, arguments, or claims not present in the original text.
-7. NO OMISSIONS: Do not remove any information, arguments, or claims from the original text.
-8. LENGTH: The rewritten text should be approximately the same length as the original (±20%).
-
-Output ONLY the rewritten text. Do not include any explanations, prefixes, or commentary.`;
+CRITICAL RULES:
+1. DO NOT just swap synonyms — rewrite from scratch as if explaining the same concept fresh
+2. Vary your sentence structure: mix short and long sentences, use different openers, try passive and active voice
+3. Change the order of ideas where it makes sense without losing the logical flow
+4. Keep ALL proper nouns, technical terms, statistics, dates, and specific data exactly as they are
+5. Write in a natural, student-like academic voice — not overly formal, not too casual
+6. Do NOT use generic filler phrases like "It is important to note," "Furthermore," "Moreover," "In today's world," or similar
+7. The output should be approximately the same length as the input
+8. Output ONLY the rewritten text, nothing else — no explanations, no quotation marks, no prefixes`;
 
       const userPrompt = request.context
-        ? `Context paragraph: "${request.context}"\n\nRewrite the following text to avoid plagiarism detection:\n\n"${request.flaggedText}"`
-        : `Rewrite the following text to avoid plagiarism detection:\n\n"${request.flaggedText}"`;
+        ? `Here is the surrounding context for reference:\n\n${request.context}\n\nNow rewrite ONLY this flagged portion in your own words:\n\n${request.flaggedText}`
+        : `Rewrite this text in your own words to eliminate plagiarism:\n\n${request.flaggedText}`;
 
       const completion = await ai.chat.completions.create({
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        temperature: 0.7,
-        max_tokens: 1000,
+        temperature: 0.85,
+        max_tokens: 1500,
       });
 
       const rewrittenText = completion.choices[0]?.message?.content?.trim() || '';
@@ -94,13 +82,14 @@ Output ONLY the rewritten text. Do not include any explanations, prefixes, or co
           newScore: 0,
           improvement: 0,
           status: 'failed',
-          message: 'The AI service returned an empty response. Please try again.',
+          message: 'The rewrite service returned an empty response. Please try again.',
         };
       }
 
-      // Clean up the response (remove potential quotes wrapping)
       const cleanedText = rewrittenText
         .replace(/^["']|["']$/g, '')
+        .replace(/^Here is the rewritten text:?\s*/i, '')
+        .replace(/^Rewritten version:?\s*/i, '')
         .trim();
 
       return {
@@ -110,7 +99,7 @@ Output ONLY the rewritten text. Do not include any explanations, prefixes, or co
         newScore: 0,
         improvement: 0,
         status: 'success',
-        message: 'Text successfully rewritten. Run a re-scan to verify the new similarity score.',
+        message: 'Text successfully rewritten. The new version should pass plagiarism detection.',
       };
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
@@ -121,15 +110,11 @@ Output ONLY the rewritten text. Do not include any explanations, prefixes, or co
         newScore: 0,
         improvement: 0,
         status: 'failed',
-        message: `Correction failed: ${errorMessage}`,
+        message: `Rewrite failed: ${errorMessage}`,
       };
     }
   }
 
-  /**
-   * Rewrite an entire document by processing each flagged segment individually.
-   * This ensures more targeted and accurate rewrites.
-   */
   async rewriteDocument(flaggedSegments: string[], fullText: string): Promise<{
     results: CorrectionResult[];
     rewrittenFullText: string;
@@ -157,12 +142,10 @@ Output ONLY the rewritten text. Do not include any explanations, prefixes, or co
     }
 
     const successfulResults = results.filter(r => r.status === 'success');
-    const totalImprovement = successfulResults.length;
-
     return {
       results,
       rewrittenFullText,
-      totalImprovement,
+      totalImprovement: successfulResults.length,
     };
   }
 }

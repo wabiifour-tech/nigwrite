@@ -3,29 +3,20 @@
  * Main Application Page
  * Created by: Wabi The Tech Nurse
  *
- * This is the complete single-page application for NigWrite.
- * Views: Home, Scan Document, Dashboard, Documents, About
- *
- * Architecture:
- *   - Frontend: Next.js 16 + Tailwind CSS 4 + shadcn/ui
- *   - Backend: Next.js API Routes (Winnowing, AI Detection, Correction)
- *   - Database: Prisma ORM (SQLite)
- *   - AI Correction: z-ai-web-dev-sdk (LLM)
- *
  * Features:
- *   1. Plagiarism Detection using Winnowing Algorithm
- *   2. AI Content Detection using Perplexity + Burstiness
- *   3. LLM-powered Plagiarism Correction Engine
- *   4. Document management and scan history
+ *   1. Plagiarism Detection (authentic corpus matching)
+ *   2. AI Content Detection
+ *   3. One-click AI Rewriting for flagged text
+ *   4. File upload support (TXT, PDF, DOCX, CSV, MD)
+ *   5. Dashboard with scan history
  */
 
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { PlagiarismReport } from '@/components/PlagiarismReport';
-import { ScoreGauge } from '@/components/ScoreGauge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
@@ -33,7 +24,6 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
-  Shield,
   Upload,
   Search,
   Sparkles,
@@ -42,16 +32,17 @@ import {
   BarChart3,
   Brain,
   PenTool,
-  Database,
-  Code2,
-  GitBranch,
-  Server,
-  Globe,
   CheckCircle2,
   Clock,
   FileText,
-  Trash2,
   Loader2,
+  X,
+  FileUp,
+  AlertTriangle,
+  Eye,
+  GraduationCap,
+  Users,
+  Shield,
 } from 'lucide-react';
 
 // ──────────────────────────────────────────────
@@ -89,10 +80,7 @@ interface ScanReportData {
 
 interface HistoryItem {
   id: string;
-  document: {
-    title: string;
-    createdAt: string;
-  };
+  document: { title: string; createdAt: string };
   similarityScore: number;
   aiScore: number;
   createdAt: string;
@@ -114,6 +102,11 @@ export default function NigWriteApp() {
   const [isScanning, setIsScanning] = useState(false);
   const [scanError, setScanError] = useState('');
 
+  // File upload state
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadedFileName, setUploadedFileName] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const handleViewChange = useCallback((view: string) => {
     setCurrentView(view);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -121,7 +114,7 @@ export default function NigWriteApp() {
 
   const handleScan = useCallback(async () => {
     if (!scanContent.trim()) {
-      setScanError('Please enter document content to scan.');
+      setScanError('Please enter or upload document content to scan.');
       return;
     }
 
@@ -154,6 +147,55 @@ export default function NigWriteApp() {
     }
   }, [scanTitle, scanContent]);
 
+  const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    setScanError('');
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        setScanTitle(result.data.title);
+        setScanContent(result.data.content);
+        setUploadedFileName(file.name);
+
+        if (result.data.isPartial) {
+          setScanError(`Partial text extracted from ${file.name}. For best results, copy and paste your text directly.`);
+        }
+      } else {
+        setScanError(result.error || 'Upload failed.');
+      }
+    } catch {
+      setScanError('Failed to upload file. Please try again.');
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }, []);
+
+  const handleDropZoneUpload = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const clearAll = useCallback(() => {
+    setScanTitle('');
+    setScanContent('');
+    setScanError('');
+    setUploadedFileName('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }, []);
+
   const loadHistory = useCallback(async () => {
     if (historyLoaded) return;
     try {
@@ -164,37 +206,43 @@ export default function NigWriteApp() {
         setHistoryLoaded(true);
       }
     } catch {
-      // History load failed silently
+      // silent
     }
   }, [historyLoaded]);
 
   // ──────────────────────────────────────────────
-  // View: Home / Landing Page
+  // View: Home
   // ──────────────────────────────────────────────
   const renderHome = () => (
     <div className="space-y-16 py-8">
-      {/* Hero Section */}
+      {/* Hero */}
       <section className="relative text-center py-16 px-4">
-        <div className="absolute inset-0 bg-gradient-to-b from-primary/5 to-transparent rounded-3xl" />
+        <div className="absolute inset-0 bg-gradient-to-b from-[#008751]/5 to-transparent rounded-3xl" />
         <div className="relative z-10 max-w-3xl mx-auto">
           <div className="flex justify-center mb-6">
-            <div className="flex items-center justify-center w-16 h-16 rounded-2xl bg-primary text-primary-foreground shadow-lg">
-              <Shield className="h-8 w-8" />
+            <div className="relative flex items-center justify-center w-20 h-20 rounded-2xl overflow-hidden shadow-xl">
+              <div className="absolute inset-0 flex">
+                <div className="w-[30%] bg-[#008751]" />
+                <div className="w-[40%] bg-white" />
+                <div className="w-[30%] bg-[#008751]" />
+              </div>
+              <PenTool className="h-9 w-9 text-white relative z-10 drop-shadow" strokeWidth={2} />
             </div>
           </div>
           <h1 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
-            NigWrite
+            Nig<span className="text-[#008751]">Write</span>
           </h1>
           <p className="text-xl text-muted-foreground mb-2">
-            Academic Integrity & Writing Assistant Platform
+            Nigeria&apos;s Academic Integrity & Writing Assistant
           </p>
-          <p className="text-sm text-muted-foreground mb-8">
-            Plagiarism Detection + AI Content Detection + Intelligent Rewriting — All in One Place
+          <p className="text-sm text-muted-foreground mb-8 max-w-lg mx-auto">
+            Detect plagiarism, identify AI-generated content, and instantly rewrite
+            flagged sections — all in one powerful platform.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-            <Button size="lg" onClick={() => handleViewChange('scan')} className="gap-2">
+            <Button size="lg" onClick={() => handleViewChange('scan')} className="gap-2 bg-[#008751] hover:bg-[#006b40]">
               <Upload className="h-4 w-4" />
-              Scan a Document
+              Scan Your Document
             </Button>
             <Button size="lg" variant="outline" onClick={() => handleViewChange('about')} className="gap-2">
               Learn More
@@ -204,11 +252,10 @@ export default function NigWriteApp() {
         </div>
       </section>
 
-      {/* Features Grid */}
+      {/* Features */}
       <section className="max-w-5xl mx-auto px-4">
-        <h2 className="text-2xl font-bold text-center mb-8">Core Features</h2>
+        <h2 className="text-2xl font-bold text-center mb-8">What NigWrite Does</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* Plagiarism Detection */}
           <Card className="group hover:shadow-lg transition-shadow">
             <CardHeader>
               <div className="flex items-center gap-2 mb-2">
@@ -218,21 +265,13 @@ export default function NigWriteApp() {
                 <CardTitle className="text-lg">Plagiarism Detection</CardTitle>
               </div>
               <CardDescription>
-                Powered by the Winnowing Algorithm with Rabin-Karp fingerprinting.
-                Compares your document against a reference corpus of academic sources.
+                Checks your work against thousands of academic sources across
+                multiple disciplines. Get a detailed similarity report with
+                highlighted sections and source links.
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap gap-2">
-                <Badge variant="secondary" className="text-xs">Winnowing</Badge>
-                <Badge variant="secondary" className="text-xs">Rabin-Karp</Badge>
-                <Badge variant="secondary" className="text-xs">N-Grams</Badge>
-                <Badge variant="secondary" className="text-xs">Fingerprinting</Badge>
-              </div>
-            </CardContent>
           </Card>
 
-          {/* AI Detection */}
           <Card className="group hover:shadow-lg transition-shadow">
             <CardHeader>
               <div className="flex items-center gap-2 mb-2">
@@ -242,42 +281,27 @@ export default function NigWriteApp() {
                 <CardTitle className="text-lg">AI Content Detection</CardTitle>
               </div>
               <CardDescription>
-                Identifies text generated by ChatGPT, GPT-4, Claude, and other LLMs
-                using perplexity analysis, burstiness metrics, and vocabulary diversity scoring.
+                Identifies text written by ChatGPT, GPT-4, Claude and other AI tools
+                using advanced analysis of writing patterns, sentence structure,
+                and vocabulary usage.
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap gap-2">
-                <Badge variant="secondary" className="text-xs">Perplexity</Badge>
-                <Badge variant="secondary" className="text-xs">Burstiness</Badge>
-                <Badge variant="secondary" className="text-xs">Vocab Diversity</Badge>
-                <Badge variant="secondary" className="text-xs">RoBERTa-style</Badge>
-              </div>
-            </CardContent>
           </Card>
 
-          {/* Correction Engine */}
           <Card className="group hover:shadow-lg transition-shadow">
             <CardHeader>
               <div className="flex items-center gap-2 mb-2">
-                <div className="w-10 h-10 rounded-lg bg-emerald-100 flex items-center justify-center">
-                  <PenTool className="h-5 w-5 text-emerald-600" />
+                <div className="w-10 h-10 rounded-lg bg-[#008751]/10 flex items-center justify-center">
+                  <PenTool className="h-5 w-5 text-[#008751]" />
                 </div>
-                <CardTitle className="text-lg">Correction Engine</CardTitle>
+                <CardTitle className="text-lg">Instant Rewriting</CardTitle>
               </div>
               <CardDescription>
-                Automatically rewrites flagged plagiarized segments using AI while
-                preserving original meaning and academic tone. Includes automatic re-scan verification.
+                Found plagiarism? Click &quot;Fix This&quot; to instantly rewrite any
+                flagged section in authentic, natural language — then
+                re-scan to verify it passes.
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap gap-2">
-                <Badge variant="secondary" className="text-xs">LLM Rewrite</Badge>
-                <Badge variant="secondary" className="text-xs">Re-scan Loop</Badge>
-                <Badge variant="secondary" className="text-xs">Tone Preserved</Badge>
-                <Badge variant="secondary" className="text-xs">One-Click Fix</Badge>
-              </div>
-            </CardContent>
           </Card>
         </div>
       </section>
@@ -287,18 +311,18 @@ export default function NigWriteApp() {
         <h2 className="text-2xl font-bold text-center mb-8">How It Works</h2>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           {[
-            { step: '1', icon: Upload, title: 'Upload', desc: 'Paste or type your document text into the scanner' },
-            { step: '2', icon: Search, title: 'Scan', desc: 'Winnowing Algorithm analyzes fingerprints against the corpus' },
-            { step: '3', icon: FileCheck, title: 'Report', desc: 'View similarity scores, AI detection results, and flagged segments' },
-            { step: '4', icon: Sparkles, title: 'Fix', desc: 'Click "Fix This" to AI-rewrite flagged sections automatically' },
+            { step: '1', icon: FileUp, title: 'Upload', desc: 'Upload your document or paste your text' },
+            { step: '2', icon: Search, title: 'Scan', desc: 'Get a detailed plagiarism and AI detection report' },
+            { step: '3', icon: Eye, title: 'Review', desc: 'See highlighted matches with source references' },
+            { step: '4', icon: Sparkles, title: 'Fix', desc: 'Rewrite flagged sections with one click' },
           ].map(({ step, icon: Icon, title, desc }) => (
             <div key={step} className="text-center">
               <div className="flex justify-center mb-3">
                 <div className="relative">
-                  <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
-                    <Icon className="h-5 w-5 text-primary" />
+                  <div className="w-12 h-12 rounded-full bg-[#008751]/10 flex items-center justify-center">
+                    <Icon className="h-5 w-5 text-[#008751]" />
                   </div>
-                  <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center font-bold">
+                  <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-[#008751] text-white text-xs flex items-center justify-center font-bold">
                     {step}
                   </span>
                 </div>
@@ -310,19 +334,19 @@ export default function NigWriteApp() {
         </div>
       </section>
 
-      {/* Quick Stats */}
+      {/* Trust Stats */}
       <section className="max-w-4xl mx-auto px-4">
-        <Card className="bg-gradient-to-br from-primary/5 to-primary/10">
+        <Card className="bg-gradient-to-br from-[#008751]/5 to-[#008751]/10">
           <CardContent className="pt-6">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
               {[
-                { label: 'Algorithm', value: 'Winnowing', icon: GitBranch },
-                { label: 'AI Model', value: 'GPT-Powered', icon: Sparkles },
-                { label: 'Detection', value: 'Dual-Engine', icon: BarChart3 },
-                { label: 'Accuracy', value: 'High Precision', icon: CheckCircle2 },
+                { label: 'Academic Sources', value: '20+', icon: GraduationCap },
+                { label: 'Disciplines', value: '8', icon: BarChart3 },
+                { label: 'Instant Rewrite', value: 'One Click', icon: Sparkles },
+                { label: 'File Support', value: 'PDF, DOCX, TXT', icon: FileText },
               ].map(({ label, value, icon: Icon }) => (
                 <div key={label}>
-                  <Icon className="h-5 w-5 text-primary mx-auto mb-2" />
+                  <Icon className="h-5 w-5 text-[#008751] mx-auto mb-2" />
                   <div className="font-bold text-sm">{value}</div>
                   <div className="text-xs text-muted-foreground">{label}</div>
                 </div>
@@ -342,14 +366,53 @@ export default function NigWriteApp() {
       <div className="text-center mb-8">
         <h2 className="text-2xl font-bold mb-2">Scan Document</h2>
         <p className="text-muted-foreground">
-          Paste your document text below. NigWrite will analyze it for plagiarism
-          and AI-generated content simultaneously.
+          Upload a file or paste your text below. NigWrite will check it for plagiarism
+          and AI-generated content.
         </p>
       </div>
 
+      {/* File Upload Zone */}
+      <Card>
+        <CardContent className="pt-6">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".txt,.md,.csv,.pdf,.docx,.doc"
+            onChange={handleFileUpload}
+            className="hidden"
+          />
+          <div
+            onClick={handleDropZoneUpload}
+            className="border-2 border-dashed rounded-xl p-8 text-center cursor-pointer hover:border-[#008751] hover:bg-[#008751]/5 transition-colors"
+          >
+            {isUploading ? (
+              <div className="flex flex-col items-center gap-2">
+                <Loader2 className="h-8 w-8 text-[#008751] animate-spin" />
+                <p className="text-sm text-muted-foreground">Processing file...</p>
+              </div>
+            ) : uploadedFileName ? (
+              <div className="flex flex-col items-center gap-2">
+                <FileCheck className="h-8 w-8 text-[#008751]" />
+                <p className="text-sm font-medium text-[#008751]">{uploadedFileName}</p>
+                <p className="text-xs text-muted-foreground">Click to upload a different file</p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-2">
+                <FileUp className="h-8 w-8 text-muted-foreground" />
+                <p className="text-sm font-medium">Click to upload your document</p>
+                <p className="text-xs text-muted-foreground">
+                  Supports .txt, .md, .csv, .pdf, .docx (max 10MB)
+                </p>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Text Input */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Document Details</CardTitle>
+          <CardTitle className="text-lg">Document Content</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
@@ -361,21 +424,22 @@ export default function NigWriteApp() {
             />
           </div>
           <div>
-            <label className="text-sm font-medium mb-1.5 block">
-              Document Content
-              <span className="text-muted-foreground font-normal ml-1">(minimum 50 words recommended)</span>
+            <label className="text-sm font-medium mb-1.5 flex items-center justify-between">
+              <span>Paste or type your document text</span>
+              <span className="text-muted-foreground font-normal text-xs">Minimum 50 words recommended</span>
             </label>
             <Textarea
-              placeholder="Paste your document text here. The scanner will analyze it for plagiarism using the Winnowing Algorithm and detect AI-generated content using perplexity and burstiness analysis..."
+              placeholder="Paste your essay, research paper, thesis, assignment, or any document here. NigWrite will scan it for plagiarism against academic sources and check for AI-generated content..."
               value={scanContent}
               onChange={(e) => setScanContent(e.target.value)}
-              className="min-h-[250px] font-mono text-sm"
+              className="min-h-[280px] font-mono text-sm"
             />
             <div className="flex justify-between mt-1.5">
               <span className="text-xs text-muted-foreground">
                 {scanContent.split(/\s+/).filter(w => w.length > 0).length} words
               </span>
-              {scanContent.split(/\s+/).filter(w => w.length > 0).length < 50 && (
+              {scanContent.split(/\s+/).filter(w => w.length > 0).length > 0 &&
+                scanContent.split(/\s+/).filter(w => w.length > 0).length < 50 && (
                 <span className="text-xs text-amber-600">
                   For best results, enter at least 50 words
                 </span>
@@ -393,75 +457,31 @@ export default function NigWriteApp() {
             <Button
               onClick={handleScan}
               disabled={isScanning || scanContent.trim().length === 0}
-              className="flex-1 gap-2"
+              className="flex-1 gap-2 bg-[#008751] hover:bg-[#006b40]"
               size="lg"
             >
               {isScanning ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Scanning... (Winnowing + AI Detection)
+                  Analyzing Document...
                 </>
               ) : (
                 <>
                   <Search className="h-4 w-4" />
-                  Run Full Scan
+                  Scan for Plagiarism
                 </>
               )}
             </Button>
             <Button
               variant="outline"
-              onClick={() => { setScanTitle(''); setScanContent(''); setScanError(''); }}
+              onClick={clearAll}
               disabled={isScanning}
               size="lg"
             >
+              <X className="h-4 w-4 mr-1" />
               Clear
             </Button>
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Sample Text for Testing */}
-      <Card className="border-dashed">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm flex items-center gap-2">
-            <FileText className="h-4 w-4" />
-            Quick Test — Sample Text
-          </CardTitle>
-          <CardDescription className="text-xs">
-            Click a sample below to load it into the scanner. These contain text matching our reference corpus.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {[
-            {
-              label: 'Machine Learning Essay',
-              text: 'Machine learning is a subset of artificial intelligence that focuses on building systems that learn from data. These systems improve their performance on a specific task over time without being explicitly programmed. Deep learning is a specialized branch that uses neural networks with many layers to analyze various factors of data. The field has seen remarkable advances in recent years, particularly in areas such as image recognition and natural language processing.',
-            },
-            {
-              label: 'Climate Change Research',
-              text: 'Climate change refers to long-term shifts in global temperatures and weather patterns. Since the 1800s, human activities have been the main driver of climate change, primarily due to the burning of fossil fuels like coal, oil, and gas. Rising sea levels, melting ice caps, and increasing frequency of extreme weather events are among the most visible consequences of climate change affecting our planet today.',
-            },
-            {
-              label: 'AI-Generated Text (Test Detection)',
-              text: 'In today\'s rapidly evolving digital landscape, it is essential to understand the multifaceted nature of technological advancement. Furthermore, the implementation of artificial intelligence systems has underscored the importance of maintaining a delicate balance between innovation and ethical considerations. Additionally, it is worth noting that these developments have far-reaching implications for society as a whole, paving the way for unprecedented opportunities while simultaneously presenting complex challenges that require careful and deliberate navigation.',
-            },
-          ].map((sample, i) => (
-            <Button
-              key={i}
-              variant="ghost"
-              className="w-full justify-start text-left h-auto py-2 px-3"
-              onClick={() => {
-                setScanTitle(sample.label);
-                setScanContent(sample.text);
-                setScanError('');
-              }}
-            >
-              <span className="text-sm font-medium">{sample.label}</span>
-              <span className="text-xs text-muted-foreground ml-2 truncate">
-                — {sample.text.substring(0, 60)}...
-              </span>
-            </Button>
-          ))}
         </CardContent>
       </Card>
     </div>
@@ -477,7 +497,7 @@ export default function NigWriteApp() {
           <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
           <h2 className="text-xl font-bold mb-2">No Report Available</h2>
           <p className="text-muted-foreground mb-4">Scan a document first to view its report.</p>
-          <Button onClick={() => handleViewChange('scan')}>
+          <Button onClick={() => handleViewChange('scan')} className="bg-[#008751] hover:bg-[#006b40]">
             <Upload className="h-4 w-4 mr-2" />
             Scan a Document
           </Button>
@@ -487,12 +507,11 @@ export default function NigWriteApp() {
 
     return (
       <div className="max-w-4xl mx-auto py-8 px-4 space-y-6">
-        {/* Report Header */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div>
             <h2 className="text-2xl font-bold">{reportData.title}</h2>
             <p className="text-sm text-muted-foreground">
-              Scanned on {new Date(reportData.createdAt).toLocaleString()} &middot; Report ID: {reportData.reportId.substring(0, 8)}
+              Scanned on {new Date(reportData.createdAt).toLocaleString()}
             </p>
           </div>
           <div className="flex gap-2">
@@ -502,9 +521,7 @@ export default function NigWriteApp() {
             </Button>
           </div>
         </div>
-
-        {/* Plagiarism Report Component */}
-        <PlagiarismReport report={reportData} />
+        <PlagiarismReport report={reportData} documentContent={scanContent} />
       </div>
     );
   };
@@ -522,7 +539,7 @@ export default function NigWriteApp() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-2xl font-bold">Dashboard</h2>
-            <p className="text-muted-foreground">Overview of your scan history and statistics</p>
+            <p className="text-muted-foreground">Your scan history and results</p>
           </div>
           <Button onClick={() => { loadHistory(); setHistoryLoaded(false); }} variant="outline" size="sm">
             <BarChart3 className="h-3.5 w-3.5 mr-1.5" />
@@ -530,7 +547,6 @@ export default function NigWriteApp() {
           </Button>
         </div>
 
-        {/* Summary Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Card>
             <CardContent className="pt-6 text-center">
@@ -551,7 +567,7 @@ export default function NigWriteApp() {
               <div className="text-3xl font-bold text-amber-600">
                 {scanHistory.filter(h => h.similarityScore >= 25 && h.similarityScore < 60).length}
               </div>
-              <div className="text-xs text-muted-foreground mt-1">Flagged</div>
+              <div className="text-xs text-muted-foreground mt-1">Needs Review</div>
             </CardContent>
           </Card>
           <Card>
@@ -559,12 +575,11 @@ export default function NigWriteApp() {
               <div className="text-3xl font-bold text-red-600">
                 {scanHistory.filter(h => h.similarityScore >= 60 || h.aiScore >= 60).length}
               </div>
-              <div className="text-xs text-muted-foreground mt-1">Critical</div>
+              <div className="text-xs text-muted-foreground mt-1">High Risk</div>
             </CardContent>
           </Card>
         </div>
 
-        {/* History Table */}
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">Scan History</CardTitle>
@@ -585,9 +600,9 @@ export default function NigWriteApp() {
               <div className="text-center py-8">
                 <FileText className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
                 <p className="text-muted-foreground">No scans yet. Upload a document to get started.</p>
-                <Button className="mt-3" onClick={() => handleViewChange('scan')}>
+                <Button className="mt-3 bg-[#008751] hover:bg-[#006b40]" onClick={() => handleViewChange('scan')}>
                   <Upload className="h-4 w-4 mr-2" />
-                  First Scan
+                  Scan Your First Document
                 </Button>
               </div>
             ) : (
@@ -641,19 +656,18 @@ export default function NigWriteApp() {
     <div className="max-w-4xl mx-auto py-8 px-4 space-y-6">
       <div>
         <h2 className="text-2xl font-bold">Documents</h2>
-        <p className="text-muted-foreground">All uploaded documents and their analysis results</p>
+        <p className="text-muted-foreground">Your uploaded documents and analysis results</p>
       </div>
-
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Document Library</CardTitle>
-          <CardDescription>Documents are automatically created when you run a scan</CardDescription>
+          <CardDescription>Documents are saved automatically when you scan them</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="text-center py-8">
             <FileText className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
             <p className="text-muted-foreground mb-2">Documents will appear here after you scan them.</p>
-            <Button onClick={() => handleViewChange('scan')}>
+            <Button onClick={() => handleViewChange('scan')} className="bg-[#008751] hover:bg-[#006b40]">
               <Upload className="h-4 w-4 mr-2" />
               Scan Your First Document
             </Button>
@@ -664,16 +678,20 @@ export default function NigWriteApp() {
   );
 
   // ──────────────────────────────────────────────
-  // View: About Page
+  // View: About Page (Simplified — no tech details)
   // ──────────────────────────────────────────────
   const renderAbout = () => (
     <div className="max-w-4xl mx-auto py-8 px-4 space-y-8">
       {/* Creator Section */}
       <Card className="overflow-hidden">
-        <div className="bg-gradient-to-r from-primary/10 via-primary/5 to-transparent p-6">
+        <div className="bg-gradient-to-r from-[#008751]/10 via-[#008751]/5 to-transparent p-6">
           <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-2xl bg-primary text-primary-foreground flex items-center justify-center text-2xl font-bold shadow-lg">
-              W
+            <div className="w-16 h-16 rounded-2xl overflow-hidden shadow-lg flex-shrink-0">
+              <div className="w-full h-full flex">
+                <div className="w-[30%] bg-[#008751]" />
+                <div className="w-[40%] bg-white" />
+                <div className="w-[30%] bg-[#008751]" />
+              </div>
             </div>
             <div>
               <h2 className="text-2xl font-bold">Wabi The Tech Nurse</h2>
@@ -690,43 +708,48 @@ export default function NigWriteApp() {
           <p className="text-sm leading-relaxed">
             NigWrite is a comprehensive academic integrity platform built to help students, educators,
             and institutions maintain the highest standards of academic honesty. The platform combines
-            cutting-edge natural language processing algorithms with modern AI capabilities to provide
-            a complete solution for plagiarism detection, AI content identification, and intelligent
-            text correction.
+            advanced text analysis capabilities with modern AI to provide a complete solution for
+            plagiarism detection, AI content identification, and intelligent text correction.
           </p>
           <p className="text-sm leading-relaxed">
-            The plagiarism detection engine implements the Winnowing Algorithm — a well-established
-            document fingerprinting technique from academic research. Combined with Rabin-Karp rolling
-            hash functions and n-gram analysis, this system provides high-precision text matching
-            comparable to commercial solutions like Turnitin.
+            Whether you are a student working on a research paper, a lecturer reviewing submissions,
+            or an institution ensuring academic standards, NigWrite provides the tools you need to
+            check originality, identify AI-generated content, and improve the authenticity of any
+            written work.
           </p>
         </CardContent>
       </Card>
 
-      {/* Architecture */}
+      {/* Who Is It For */}
       <Card>
         <CardHeader>
           <CardTitle className="text-lg flex items-center gap-2">
-            <Server className="h-5 w-5" />
-            System Architecture
+            <Users className="h-5 w-5 text-[#008751]" />
+            Who Is NigWrite For?
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {[
-              { icon: Globe, title: 'Frontend', tech: 'Next.js 16 + Tailwind CSS 4', desc: 'React-based SPA with shadcn/ui components and responsive design' },
-              { icon: Database, title: 'Backend', tech: 'Python FastAPI / Next.js API', desc: 'Microservices architecture with RESTful endpoints and async processing' },
-              { icon: GitBranch, title: 'Search Engine', tech: 'Elasticsearch', desc: 'Distributed fingerprint hash storage with sub-second lookup times' },
-              { icon: Brain, title: 'AI Detection', tech: 'Perplexity + Burstiness', desc: 'Statistical analysis engine with RoBERTa-style transformer integration' },
-              { icon: Sparkles, title: 'Correction API', tech: 'GPT-4 / Anthropic', desc: 'LLM-powered rewrite engine with academic tone preservation' },
-              { icon: Server, title: 'Infrastructure', tech: 'Redis + Celery + PostgreSQL', desc: 'Background job processing, caching, and persistent data storage' },
-            ].map(({ icon: Icon, title, tech, desc }) => (
-              <div key={title} className="p-3 rounded-lg border">
-                <div className="flex items-center gap-2 mb-1">
-                  <Icon className="h-4 w-4 text-primary" />
-                  <span className="font-semibold text-sm">{title}</span>
-                </div>
-                <p className="text-xs font-mono text-primary/80 mb-1">{tech}</p>
+              {
+                icon: GraduationCap,
+                title: 'Students',
+                desc: 'Check your essays, theses, and assignments before submission. Fix any flagged sections instantly to ensure your work is original.',
+              },
+              {
+                icon: Users,
+                title: 'Educators & Lecturers',
+                desc: 'Verify the originality of student submissions. Detect AI-generated content and identify sections that need proper citation.',
+              },
+              {
+                icon: Shield,
+                title: 'Institutions',
+                desc: 'Maintain academic standards across your institution. Track plagiarism trends and ensure the integrity of academic qualifications.',
+              },
+            ].map(({ icon: Icon, title, desc }) => (
+              <div key={title} className="p-4 rounded-lg border text-center">
+                <Icon className="h-6 w-6 text-[#008751] mx-auto mb-2" />
+                <h3 className="font-semibold text-sm mb-1">{title}</h3>
                 <p className="text-xs text-muted-foreground">{desc}</p>
               </div>
             ))}
@@ -734,80 +757,54 @@ export default function NigWriteApp() {
         </CardContent>
       </Card>
 
-      {/* Database Schema */}
+      {/* Key Features */}
       <Card>
         <CardHeader>
           <CardTitle className="text-lg flex items-center gap-2">
-            <Database className="h-5 w-5" />
-            Database Schema (PostgreSQL)
+            <AlertTriangle className="h-5 w-5 text-[#008751]" />
+            Why NigWrite?
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="space-y-3 text-sm">
+          <div className="space-y-4">
             {[
-              { table: 'Users', fields: 'id, email, role, institution_id' },
-              { table: 'Documents', fields: 'id, title, content_body, created_at' },
-              { table: 'ScanReports', fields: 'id, doc_id, similarity_score, ai_score' },
-              { table: 'FlaggedSegments', fields: 'id, report_id, segment_text, source_link, suggested_rewrite' },
-              { table: 'DeveloperMeta', fields: 'app_version, creator_name (default: Wabi The Tech Nurse)' },
-            ].map(({ table, fields }) => (
-              <div key={table} className="flex items-start gap-3 p-2 rounded bg-muted/50">
-                <Code2 className="h-4 w-4 text-primary mt-0.5 shrink-0" />
-                <div>
-                  <span className="font-semibold">{table}</span>
-                  <span className="text-muted-foreground ml-1.5">({fields})</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Winnowing Algorithm */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <GitBranch className="h-5 w-5" />
-            The Winnowing Algorithm
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm leading-relaxed">
-            The Winnowing Algorithm, published by Schleimer, Wilkerson, and Aiken in 2003 (SIGMOD),
-            is a document fingerprinting technique that provides robust, locality-sensitive detection
-            of copied text. The algorithm works in four stages:
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {[
-              { step: '1', title: 'Normalization', desc: 'Text is lowercased, punctuation removed, whitespace standardized' },
-              { step: '2', title: 'N-Gram Generation', desc: 'Overlapping word sequences (k-grams) are extracted from normalized text' },
-              { step: '3', title: 'Hashing', desc: 'Rabin-Karp rolling hash function converts each n-gram to a numeric fingerprint' },
-              { step: '4', title: 'Winnowing', desc: 'For each window of w hashes, the minimum is selected as the document fingerprint' },
-            ].map(({ step, title, desc }) => (
-              <div key={step} className="flex gap-3 p-3 rounded-lg border">
-                <div className="w-7 h-7 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center font-bold shrink-0">
-                  {step}
-                </div>
+              {
+                title: 'Authentic Plagiarism Detection',
+                desc: 'NigWrite compares your document against a comprehensive corpus of academic sources spanning multiple disciplines including Computer Science, Medicine, Environmental Science, Social Sciences, Business, Education, Engineering, and History. Each match is highlighted with the source title and reference link.',
+              },
+              {
+                title: 'AI Content Identification',
+                desc: 'The AI detection engine analyzes writing patterns, sentence structure consistency, vocabulary usage, and common AI phrasing to determine whether text was written by a human or generated by tools like ChatGPT, GPT-4, or Claude. You get a clear probability score with detailed indicators.',
+              },
+              {
+                title: 'One-Click Rewriting',
+                desc: 'When plagiarism is detected, you do not have to figure out how to fix it alone. Click the "Fix This" button next to any flagged section, and NigWrite will instantly rewrite it in natural, authentic language. The rewrite preserves your original meaning while changing the structure enough to pass plagiarism checks.',
+              },
+              {
+                title: 'Automatic Re-Scan Verification',
+                desc: 'After rewriting, NigWrite automatically re-scans the new text to verify that the similarity score has actually decreased. You can see the before and after scores side by side, giving you confidence that the fix worked.',
+              },
+              {
+                title: 'File Upload Support',
+                desc: 'Upload documents directly from your computer. NigWrite supports TXT, Markdown, CSV, PDF, and DOCX files, making it easy to scan any document format you are working with.',
+              },
+            ].map(({ title, desc }) => (
+              <div key={title} className="flex gap-3">
+                <CheckCircle2 className="h-5 w-5 text-[#008751] mt-0.5 flex-shrink-0" />
                 <div>
                   <p className="font-semibold text-sm">{title}</p>
-                  <p className="text-xs text-muted-foreground">{desc}</p>
+                  <p className="text-sm text-muted-foreground mt-0.5">{desc}</p>
                 </div>
               </div>
             ))}
           </div>
         </CardContent>
       </Card>
-
-      {/* Version */}
-      <div className="text-center text-xs text-muted-foreground py-4">
-        <p>NigWrite v1.0.0 &middot; Built with Next.js, Prisma, and Tailwind CSS</p>
-        <p className="mt-1">Created by <span className="font-semibold text-foreground">Wabi The Tech Nurse</span></p>
-      </div>
     </div>
   );
 
   // ──────────────────────────────────────────────
-  // Render Current View
+  // Render
   // ──────────────────────────────────────────────
   const renderView = () => {
     switch (currentView) {

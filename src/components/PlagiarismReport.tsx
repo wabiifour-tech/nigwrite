@@ -242,28 +242,28 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
         />
       </div>
 
-      {/* Statistics Summary */}
+      {/* Summary */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Scan Statistics</CardTitle>
+          <CardTitle className="text-base">Report Summary</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div className="text-center p-3 rounded-lg bg-muted/50">
-              <div className="text-2xl font-bold">{report.plagiarism.totalFingerprints}</div>
-              <div className="text-xs text-muted-foreground">Total Fingerprints</div>
+              <div className="text-2xl font-bold">{report.plagiarism.flaggedSegments.length}</div>
+              <div className="text-xs text-muted-foreground">Flagged Sections</div>
             </div>
             <div className="text-center p-3 rounded-lg bg-muted/50">
               <div className="text-2xl font-bold text-orange-600">{report.plagiarism.matchingFingerprints}</div>
-              <div className="text-xs text-muted-foreground">Matches Found</div>
+              <div className="text-xs text-muted-foreground">Source Matches</div>
             </div>
             <div className="text-center p-3 rounded-lg bg-muted/50">
-              <div className="text-2xl font-bold">{report.plagiarism.flaggedSegments.length}</div>
-              <div className="text-xs text-muted-foreground">Flagged Segments</div>
+              <div className="text-2xl font-bold capitalize">{report.aiDetection.confidence}</div>
+              <div className="text-xs text-muted-foreground">AI Detection</div>
             </div>
             <div className="text-center p-3 rounded-lg bg-muted/50">
-              <div className="text-2xl font-bold">{report.aiDetection.confidence}</div>
-              <div className="text-xs text-muted-foreground">AI Confidence</div>
+              <div className="text-2xl font-bold">{report.plagiarism.totalFingerprints}</div>
+              <div className="text-xs text-muted-foreground">Text Segments</div>
             </div>
           </div>
         </CardContent>
@@ -281,15 +281,15 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
           <CardContent className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
               <div className="p-2 rounded-lg bg-muted/50">
-                <span className="text-muted-foreground">Perplexity: </span>
+                <span className="text-muted-foreground">Word Predictability: </span>
                 <span className="font-semibold">{report.aiDetection.perplexity}</span>
               </div>
               <div className="p-2 rounded-lg bg-muted/50">
-                <span className="text-muted-foreground">Burstiness: </span>
+                <span className="text-muted-foreground">Sentence Variation: </span>
                 <span className="font-semibold">{report.aiDetection.burstiness}%</span>
               </div>
               <div className="p-2 rounded-lg bg-muted/50">
-                <span className="text-muted-foreground">Vocab Diversity: </span>
+                <span className="text-muted-foreground">Vocabulary Range: </span>
                 <span className="font-semibold">{(report.aiDetection.vocabularyDiversity * 100).toFixed(1)}%</span>
               </div>
             </div>
@@ -401,7 +401,7 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
                       <Button
                         onClick={() => handleRewrite(segment, index)}
                         disabled={state?.isRewriting}
-                        className="w-full sm:w-auto"
+                        className="w-full sm:w-auto bg-[#008751] hover:bg-[#006b40]"
                         variant={state?.isRewriting ? "secondary" : "default"}
                       >
                         {state?.isRewriting ? (

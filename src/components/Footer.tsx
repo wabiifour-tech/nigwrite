@@ -2,13 +2,13 @@
  * NigWrite - Footer Component
  * Created by: Wabi The Tech Nurse
  *
- * Application footer displaying branding and credits.
+ * Application footer with Nigeria-themed branding and credits.
  * Must appear on every page of the application.
  */
 
 'use client';
 
-import { Shield, Code2, Heart } from 'lucide-react';
+import { PenTool, Heart } from 'lucide-react';
 
 export function Footer() {
   const currentYear = new Date().getFullYear();
@@ -20,8 +20,17 @@ export function Footer() {
           {/* Brand */}
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
-              <Shield className="h-5 w-5 text-primary" />
-              <span className="font-bold text-sm">NigWrite</span>
+              <div className="relative flex items-center justify-center w-6 h-6 rounded overflow-hidden">
+                <div className="absolute inset-0 flex">
+                  <div className="w-[30%] bg-[#008751]" />
+                  <div className="w-[40%] bg-white" />
+                  <div className="w-[30%] bg-[#008751]" />
+                </div>
+                <PenTool className="h-3 w-3 text-[#008751] relative z-10" strokeWidth={2.5} />
+              </div>
+              <span className="font-bold text-sm">
+                Nig<span className="text-[#008751]">Write</span>
+              </span>
             </div>
             <span className="text-muted-foreground text-xs">|</span>
             <span className="text-muted-foreground text-xs">
@@ -32,9 +41,8 @@ export function Footer() {
           {/* Creator Credit */}
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <span>Powered by</span>
-            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 border border-primary/20">
-              <Code2 className="h-3.5 w-3.5 text-primary" />
-              <span className="font-semibold text-primary text-xs">
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#008751]/10 border border-[#008751]/20">
+              <span className="font-semibold text-[#008751] text-xs">
                 Wabi The Tech Nurse
               </span>
             </div>
@@ -46,27 +54,6 @@ export function Footer() {
             <Heart className="h-3 w-3 text-red-500 fill-red-500" />
             <span>by Wabi The Tech Nurse</span>
           </div>
-        </div>
-
-        {/* Technical Footer */}
-        <div className="mt-4 pt-4 border-t flex flex-col sm:flex-row items-center justify-between gap-2">
-          <div className="flex items-center gap-4 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              Winnowing Algorithm
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
-              AI Detection
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500" />
-              LLM Correction
-            </span>
-          </div>
-          <span className="text-xs text-muted-foreground">
-            v1.0.0 — Microservices Architecture
-          </span>
         </div>
       </div>
     </footer>
