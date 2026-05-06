@@ -41,12 +41,23 @@ model User {
   role          String       @default("student") // student, lecturer, admin
   institutionId String?
   institution   Institution? @relation(fields: [institutionId], references: [id])
+  isActive      Boolean      @default(true)
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
   documents     Document[]
   assignments   Assignment[]
   submissions  Submission[]
   notifications Notification[]
+  quickMarks       QuickMark[]
+  inlineComments   InlineComment[]
+  voiceComments    VoiceComment[]
+  rubricScores     RubricScore[] @relation("GradedByUser")
+  gradedSubmissions Submission[] @relation("Grader")
+  sharedReports    ReportShare[]
+  sourceDocuments  SourceDocument[]
+  enrollments       Enrollment[]
+  taughtCourses     Course[]  @relation("InstructorCourses")
+  auditLogs         AuditLog[]
 }
 
 // ──────────────────────────────────────────────
@@ -60,6 +71,7 @@ model Institution {
   updatedAt   DateTime @updatedAt
   users       User[]
   assignments Assignment[]
+  courses     Course[]
 }
 
 // ──────────────────────────────────────────────
@@ -92,7 +104,8 @@ model ScanReport {
   status          String           @default("completed") // pending, processing, completed
   createdAt       DateTime         @default(now())
   flaggedSegments FlaggedSegment[]
-  submission    Submission?
+  submission      Submission?
+  shares          ReportShare[]
 }
 
 // ──────────────────────────────────────────────
@@ -116,11 +129,36 @@ model FlaggedSegment {
 // Pre-loaded documents used as the comparison database
 // ──────────────────────────────────────────────
 model SourceDocument {
-  id        String   @id @default(cuid())
-  title     String
-  content   String
-  sourceUrl String?
-  addedAt   DateTime @default(now())
+  id            String        @id @default(cuid())
+  externalId    String        @unique
+  title         String
+  content       String
+  sourceType    String        @default("publication") // "publication", "internet", "student_paper"
+  sourceUrl     String?
+  discipline    String?
+  author        String?
+  isUserDocument Boolean       @default(false)
+  userId        String?
+  user          User?         @relation(fields: [userId], references: [id])
+  fingerprints  Fingerprint[]
+  addedAt       DateTime      @default(now())
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([externalId])
+  @@index([isUserDocument])
+}
+
+model Fingerprint {
+  id          String         @id @default(cuid())
+  hashValue   Int
+  documentId  String
+  document    SourceDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  position    Int
+  ngram       String
+
+  @@index([hashValue])
+  @@index([documentId])
 }
 
 // ──────────────────────────────────────────────
@@ -131,6 +169,7 @@ model Assignment {
   title         String
   description   String
   courseId      String?
+  course        Course?       @relation(fields: [courseId], references: [id])
   institutionId String?
   institution   Institution? @relation(fields: [institutionId], references: [id])
   createdBy     String
@@ -139,6 +178,14 @@ model Assignment {
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
   submissions   Submission[]
+  rubrics           Rubric[]
+  allowResubmissions Boolean  @default(true)
+  maxResubmissions  Int       @default(5)
+  allowLateSubmission Boolean  @default(true)
+  latePenalty       Float?
+  anonymousGrading  Boolean   @default(false)
+  gradeScale        String    @default("0-100")
+  maxGrade          Float     @default(100)
 }
 
 // ──────────────────────────────────────────────
@@ -155,8 +202,20 @@ model Submission {
   reportId     String?    @unique
   report       ScanReport? @relation(fields: [reportId], references: [id])
   status       String     @default("submitted") // submitted, graded, flagged
-  grade        String?
-  feedback     String?
+  grade        Float?
+  gradeScale     String?       @default("0-100")
+  letterGrade    String?
+  isDraft        Boolean       @default(false)
+  version        Int           @default(1)
+  parentVersionId String?
+  feedbackSummary String?
+  feedback       String?
+  gradedAt       DateTime?
+  gradedBy       String?
+  grader         User?         @relation("Grader", fields: [gradedBy], references: [id])
+  inlineComments  InlineComment[]
+  voiceComments   VoiceComment[]
+  rubricScores    RubricScore[]
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 }
@@ -173,4 +232,194 @@ model Notification {
   type      String   @default("info") // info, warning, success, error
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
+}
+
+// ──────────────────────────────────────────────
+// Rubrics (Grading criteria templates)
+// ──────────────────────────────────────────────
+model Rubric {
+  id              String        @id @default(cuid())
+  title           String
+  description     String?
+  assignmentId    String?
+  assignment      Assignment?   @relation(fields: [assignmentId], references: [id])
+  criteria        RubricCriteria[]
+  rubricScores    RubricScore[]
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+}
+
+model RubricCriteria {
+  id          String  @id @default(cuid())
+  rubricId    String
+  rubric      Rubric  @relation(fields: [rubricId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  maxScore    Float   @default(10)
+  weight      Float   @default(1)
+  levels      RubricLevel[]
+  rubricScores RubricScore[]
+  order       Int     @default(0)
+}
+
+model RubricLevel {
+  id          String  @id @default(cuid())
+  criteriaId  String
+  criteria    RubricCriteria @relation(fields: [criteriaId], references: [id], onDelete: Cascade)
+  label       String
+  description String
+  score       Float
+  rubricScores RubricScore[]
+  order       Int           @default(0)
+}
+
+// ──────────────────────────────────────────────
+// Inline Comments (on submissions)
+// ──────────────────────────────────────────────
+model InlineComment {
+  id           String      @id @default(cuid())
+  submissionId String
+  submission   Submission  @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User        @relation(fields: [userId], references: [id])
+  text         String
+  position     Int
+  rangeLength  Int         @default(0)
+  color        String      @default("#FFD700")
+  isResolved   Boolean     @default(false)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+}
+
+// ──────────────────────────────────────────────
+// Quick Marks (Reusable comment templates)
+// ──────────────────────────────────────────────
+model QuickMark {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  text      String
+  category  String   @default("General")
+  color     String   @default("#FFD700")
+  useCount  Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+// ──────────────────────────────────────────────
+// Voice Comments (Audio feedback on submissions)
+// ──────────────────────────────────────────────
+model VoiceComment {
+  id           String      @id @default(cuid())
+  submissionId String
+  submission   Submission  @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User        @relation(fields: [userId], references: [id])
+  audioData    String
+  duration     Int         @default(0)
+  createdAt    DateTime    @default(now())
+}
+
+// ──────────────────────────────────────────────
+// Rubric Scores (Per-criterion scores)
+// ──────────────────────────────────────────────
+model RubricScore {
+  id             String        @id @default(cuid())
+  submissionId   String
+  submission     Submission    @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  rubricId       String
+  rubric         Rubric        @relation(fields: [rubricId], references: [id])
+  criteriaId     String
+  criteria       RubricCriteria @relation(fields: [criteriaId], references: [id])
+  levelId        String?
+  level          RubricLevel?  @relation(fields: [levelId], references: [id])
+  score          Float
+  feedback       String?
+  gradedBy       String
+  gradedByUser   User          @relation("GradedByUser", fields: [gradedBy], references: [id])
+  createdAt      DateTime      @default(now())
+}
+
+// ──────────────────────────────────────────────
+// Courses
+// ──────────────────────────────────────────────
+model Course {
+  id            String        @id @default(cuid())
+  name          String
+  code          String
+  description   String?
+  department    String?
+  institutionId String?
+  institution   Institution?  @relation(fields: [institutionId], references: [id])
+  instructorId  String?
+  instructor    User?         @relation("InstructorCourses", fields: [instructorId], references: [id])
+  assignments   Assignment[]
+  enrollments   Enrollment[]
+  startDate     DateTime?
+  endDate       DateTime?
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+}
+
+// ──────────────────────────────────────────────
+// Enrollments
+// ──────────────────────────────────────────────
+model Enrollment {
+  id         String   @id @default(cuid())
+  courseId   String
+  course     Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  role       String   @default("student")
+  enrolledAt DateTime @default(now())
+  @@unique([courseId, userId])
+}
+
+// ──────────────────────────────────────────────
+// Audit Logs
+// ──────────────────────────────────────────────
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String
+  resource  String
+  resourceId String?
+  details   String?
+  ipAddress String?
+  createdAt DateTime @default(now())
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// ──────────────────────────────────────────────
+// System Settings
+// ──────────────────────────────────────────────
+model SystemSettings {
+  id                    String   @id @default(cuid())
+  key                   String   @unique
+  value                 String
+  description           String?
+  updatedAt             DateTime @updatedAt
+  updatedBy             String?
+}
+
+// ──────────────────────────────────────────────
+// Report Shares
+// Shared links for viewing plagiarism reports
+// ──────────────────────────────────────────────
+model ReportShare {
+  id          String     @id @default(cuid())
+  reportId    String
+  scanReport  ScanReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  shareToken  String     @unique
+  password    String?
+  expiresAt   DateTime?
+  viewCount   Int        @default(0)
+  maxViews    Int?
+  createdAt   DateTime   @default(now())
+  createdBy   String
+  creator     User       @relation(fields: [createdBy], references: [id])
 }

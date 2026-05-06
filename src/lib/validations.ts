@@ -79,6 +79,34 @@ export const loginSchema = z.object({
 });
 
 /**
+ * Schema for /api/submissions/resubmit POST
+ */
+export const resubmitSchema = z.object({
+  parentSubmissionId: z.string().min(1, "Parent submission ID is required"),
+  content: z.string().min(10, "Content must be at least 10 characters"),
+  title: z.string().max(200, "Title must be 200 characters or less").optional(),
+  isDraft: z.boolean().optional().default(false),
+});
+
+/**
+ * Schema for /api/reports/share POST
+ */
+export const createShareSchema = z.object({
+  reportId: z.string().min(1, "Report ID is required"),
+  expiresAt: z.string().datetime().optional().nullable(),
+  password: z.string().min(1).max(100).optional().nullable(),
+  maxViews: z.number().int().min(1).optional().nullable(),
+  userId: z.string().min(1, "User ID is required"),
+});
+
+/**
+ * Schema for /api/reports/unshare POST
+ */
+export const unshareSchema = z.object({
+  shareToken: z.string().min(1, "Share token is required"),
+});
+
+/**
  * Helper: format Zod validation errors into a flat array of messages.
  */
 export function formatValidationErrors(

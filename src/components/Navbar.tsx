@@ -9,18 +9,29 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { PenTool, Upload, LayoutDashboard, FileText, Info, Bell, X, Check } from 'lucide-react';
+import { PenTool, Upload, LayoutDashboard, FileText, Info, Bell, X, Check, Shield, GraduationCap, BookOpen, User, Sparkles, ClipboardList } from 'lucide-react';
 
 interface NavbarProps {
   currentView: string;
   onViewChange: (view: string) => void;
 }
 
+const studentNavItems = [
+  { id: 'student-dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'scan', label: 'Scan', icon: FileText },
+  { id: 'selfcheck', label: 'Self-Check', icon: Sparkles },
+  { id: 'courses', label: 'Courses', icon: BookOpen },
+  { id: 'history', label: 'History', icon: ClipboardList },
+  { id: 'profile', label: 'Profile', icon: User },
+];
+
 const navItems = [
   { id: 'home', label: 'Home', icon: Upload },
   { id: 'scan', label: 'Scan Document', icon: FileText },
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'documents', label: 'Documents', icon: FileText },
+  { id: 'instructor', label: 'Instructor', icon: GraduationCap },
+  { id: 'admin', label: 'Admin', icon: Shield },
   { id: 'about', label: 'About', icon: Info },
 ];
 
@@ -130,7 +141,10 @@ export function Navbar({ currentView, onViewChange }: NavbarProps) {
 
           {/* Desktop Navigation */}
           <nav className="hidden md:flex items-center gap-1">
-            {navItems.map((item) => {
+            {(currentView === 'student-dashboard' || currentView === 'history' || currentView === 'courses' || currentView === 'profile' || currentView === 'selfcheck' || currentView === 'receipt'
+              ? studentNavItems
+              : navItems
+            ).map((item) => {
               const Icon = item.icon;
               const isActive = currentView === item.id;
               return (
@@ -249,7 +263,10 @@ export function Navbar({ currentView, onViewChange }: NavbarProps) {
       {/* Mobile Navigation */}
       <div className="md:hidden border-t">
         <div className="flex overflow-x-auto px-2 py-1 gap-1">
-          {navItems.map((item) => {
+          {(currentView === 'student-dashboard' || currentView === 'history' || currentView === 'courses' || currentView === 'profile' || currentView === 'selfcheck' || currentView === 'receipt'
+            ? studentNavItems
+            : navItems
+          ).map((item) => {
             const Icon = item.icon;
             const isActive = currentView === item.id;
             return (

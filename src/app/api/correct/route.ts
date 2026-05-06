@@ -10,7 +10,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { CorrectionService } from "@/lib/correction-service";
 import { WinnowingEngine } from "@/lib/winnowing-engine";
-import { getFingerprintStore } from "@/lib/fingerprint-store";
+import { getPersistentFingerprintStore } from "@/lib/persistent-fingerprint-store";
 import { correctSchema, formatValidationErrors } from "@/lib/validations";
 
 export async function POST(request: NextRequest) {
@@ -48,11 +48,11 @@ export async function POST(request: NextRequest) {
 
     // Step 2: Re-check - Run the rewritten text through plagiarism detection
     const winnowing = new WinnowingEngine();
-    const store = getFingerprintStore();
+    const store = await getPersistentFingerprintStore();
 
     // Get original similarity for comparison
     const originalFingerprints = winnowing.generateFingerprints(flaggedText);
-    const originalMatches = store.search(
+    const originalMatches = await store.search(
       originalFingerprints.map((fp) => fp.hash)
     );
     const originalScan = winnowing.matchDocument(flaggedText, originalMatches);
@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
     const newFingerprints = winnowing.generateFingerprints(
       correctionResult.rewrittenText
     );
-    const newMatches = store.search(newFingerprints.map((fp) => fp.hash));
+    const newMatches = await store.search(newFingerprints.map((fp) => fp.hash));
     const newScan = winnowing.matchDocument(
       correctionResult.rewrittenText,
       newMatches

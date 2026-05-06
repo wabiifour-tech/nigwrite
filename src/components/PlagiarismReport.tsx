@@ -38,7 +38,13 @@ import {
   Info,
   Download,
   Loader2,
+  GitCompare,
+  Columns,
+  ChevronRight,
 } from 'lucide-react';
+import { SideBySideComparison, type SourceBreakdown as SBS_SourceBreakdown, type MatchRegion as SBS_MatchRegion } from '@/components/SideBySideComparison';
+import { PostScanExclusions, type ExclusionSettingsData, type RescoreResult, type SourceInfo, DEFAULT_EXCLUSION_SETTINGS as POST_DEFAULT } from '@/components/PostScanExclusions';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -154,6 +160,7 @@ interface ReportData {
 interface PlagiarismReportProps {
   report: ReportData;
   documentContent?: string;
+  onReportUpdate?: (updatedReport: Partial<ReportData>) => void;
 }
 
 interface SegmentRewriteState {
@@ -672,10 +679,11 @@ interface SourcePanelProps {
   sourceBreakdown: SourceBreakdown[];
   activeSourceId: string | null;
   onSourceClick: (sourceId: string | null) => void;
+  onCompare: (sourceId: string) => void;
   matchRegions: MatchRegion[];
 }
 
-function SourcePanel({ sourceBreakdown, activeSourceId, onSourceClick, matchRegions }: SourcePanelProps) {
+function SourcePanel({ sourceBreakdown, activeSourceId, onSourceClick, onCompare, matchRegions }: SourcePanelProps) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   const internetSources = sourceBreakdown.filter(s => s.sourceType === 'internet');
@@ -796,6 +804,19 @@ function SourcePanel({ sourceBreakdown, activeSourceId, onSourceClick, matchRegi
                           }}
                         />
                       </div>
+
+                      {/* Compare button */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onCompare(source.sourceId);
+                        }}
+                        className="mt-2 w-full flex items-center justify-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium text-[#008751] bg-[#008751]/5 hover:bg-[#008751]/10 transition-colors"
+                      >
+                        <GitCompare className="h-3 w-3" />
+                        Compare
+                        <ChevronRight className="h-2.5 w-2.5" />
+                      </button>
                     </div>
                   </div>
                 </button>
@@ -820,26 +841,127 @@ function SourcePanel({ sourceBreakdown, activeSourceId, onSourceClick, matchRegi
 // Main PlagiarismReport Component
 // ──────────────────────────────────────────────
 
-export function PlagiarismReport({ report, documentContent }: PlagiarismReportProps) {
+export function PlagiarismReport({ report, documentContent, onReportUpdate }: PlagiarismReportProps) {
   const [segmentStates, setSegmentStates] = useState<Map<string, SegmentRewriteState>>(new Map());
   const [expandedMatches, setExpandedMatches] = useState<Set<number>>(new Set());
   const [showAllSentences, setShowAllSentences] = useState(false);
   const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
   const [isDownloadingDocx, setIsDownloadingDocx] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>('originality');
+  const [comparisonSourceId, setComparisonSourceId] = useState<string | null>(null);
+  const [rescoredReport, setRescoredReport] = useState<Partial<ReportData> | null>(null);
 
   const flaggedSentences = (report.aiDetection.sentences || []).filter(s => s.isFlagged);
   const displaySentences = showAllSentences ? flaggedSentences : flaggedSentences.slice(0, 5);
 
-  const matchRegions = report.plagiarism.matchRegions || [];
-  const sourceBreakdown = report.plagiarism.sourceBreakdown || [];
-  const totalWords = report.plagiarism.totalWords || 0;
-  const matchedWords = report.plagiarism.matchedWords || 0;
-  const excludedWords = report.plagiarism.excludedWords || 0;
-  const sourceTypeBreakdown = report.plagiarism.sourceTypeBreakdown;
+  // Use rescored data if available, otherwise use original
+  const displayReport = rescoredReport
+    ? { ...report, ...rescoredReport, plagiarism: { ...report.plagiarism, ...(rescoredReport.plagiarism || {}) } }
+    : report;
+
+  const matchRegions = displayReport.plagiarism.matchRegions || [];
+  const sourceBreakdown = displayReport.plagiarism.sourceBreakdown || [];
+  const totalWords = displayReport.plagiarism.totalWords || 0;
+  const matchedWords = displayReport.plagiarism.matchedWords || 0;
+  const excludedWords = displayReport.plagiarism.excludedWords || 0;
+  const sourceTypeBreakdown = displayReport.plagiarism.sourceTypeBreakdown;
 
   const handleSourceClick = useCallback((sourceId: string | null) => {
     setActiveSourceId(sourceId);
   }, []);
+
+  const handleCompareSource = useCallback((sourceId: string) => {
+    setComparisonSourceId(sourceId);
+    setActiveTab('comparison');
+  }, []);
+
+  const handleBackToReport = useCallback(() => {
+    setActiveTab('originality');
+    setComparisonSourceId(null);
+  }, []);
+
+  const handleExclusionsChange = useCallback((_newExclusions: ExclusionSettingsData) => {
+    // Reset rescored state when exclusions change (user must click Re-score)
+  }, []);
+
+  const handleRescore = useCallback((result: RescoreResult) => {
+    const updatedPlagiarism = {
+      similarityScore: result.similarityScore,
+      totalWords: result.totalWords,
+      matchedWords: result.matchedWords,
+      excludedWords: result.excludedWords,
+      matchRegions: result.matchRegions,
+      sourceBreakdown: result.sourceBreakdown,
+      sourceTypeBreakdown: result.sourceTypeBreakdown,
+      primarySources: result.primarySources,
+      flaggedSegments: result.flaggedSegments,
+      matches: result.matches,
+    };
+    const updated: Partial<ReportData> = {
+      plagiarism: updatedPlagiarism as unknown as ReportData['plagiarism'],
+    };
+    setRescoredReport(updated);
+    onReportUpdate?.(updated);
+  }, [onReportUpdate]);
+
+  const postScanExclusionSettings: ExclusionSettingsData = {
+    excludeQuotes: true,
+    excludeBibliography: true,
+    excludeCitations: true,
+    excludeInternetSources: false,
+    excludePublications: false,
+    excludeStudentPapers: false,
+    excludeSmallMatches: 0,
+  };
+
+  const postScanSources: SourceInfo[] = sourceBreakdown.map(s => ({
+    sourceId: s.sourceId,
+    sourceTitle: s.sourceTitle,
+    sourceType: s.sourceType,
+    sourceUrl: s.sourceUrl,
+    percentageOfDocument: s.percentageOfDocument,
+    matchedWords: s.matchedWords,
+    matchCount: s.matchCount,
+  }));
+
+  const sbsMatchRegions: SBS_MatchRegion[] = matchRegions.map(r => ({
+    startWordIndex: r.startWordIndex,
+    endWordIndex: r.endWordIndex,
+    text: r.text,
+    sourceId: r.sourceId,
+    sourceTitle: r.sourceTitle,
+    sourceType: r.sourceType,
+    sourceUrl: r.sourceUrl,
+    wordCount: r.wordCount,
+    isPrimary: r.isPrimary,
+  }));
+
+  const sbsSourceBreakdown: SBS_SourceBreakdown[] = sourceBreakdown.map(s => ({
+    sourceId: s.sourceId,
+    sourceTitle: s.sourceTitle,
+    sourceType: s.sourceType,
+    sourceUrl: s.sourceUrl,
+    matchCount: s.matchCount,
+    matchedWords: s.matchedWords,
+    percentageOfDocument: s.percentageOfDocument,
+    isPrimary: s.isPrimary,
+    regions: s.regions.map(r => ({
+      startWordIndex: r.startWordIndex,
+      endWordIndex: r.endWordIndex,
+      text: r.text,
+      sourceId: r.sourceId,
+      sourceTitle: r.sourceTitle,
+      sourceType: r.sourceType,
+      sourceUrl: r.sourceUrl,
+      wordCount: r.wordCount,
+      isPrimary: r.isPrimary,
+    })),
+  }));
+
+  const isRescored = rescoredReport !== null;
+  const scoreDiff = isRescored
+    ? (displayReport.plagiarism.similarityScore - report.plagiarism.similarityScore)
+    : null;
 
   const handleRewrite = async (segmentText: string, index: number) => {
     const key = `seg-${index}`;
@@ -964,7 +1086,7 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
     }
   }, [report.reportId, report.title]);
 
-  const getVerdictColor = (status: string) => {
+  const getVerdictBorderColor = (status: string) => {
     switch (status) {
       case 'original': return 'border-emerald-500 bg-emerald-50';
       case 'warning': return 'border-amber-500 bg-amber-50';
@@ -996,9 +1118,37 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
 
   return (
     <div className="space-y-6">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="w-full grid grid-cols-2">
+          <TabsTrigger value="originality" className="gap-1.5">
+            <FileText className="h-3.5 w-3.5" />
+            Originality
+          </TabsTrigger>
+          <TabsTrigger value="comparison" className="gap-1.5">
+            <Columns className="h-3.5 w-3.5" />
+            Comparison
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="originality" className="mt-6 space-y-6">
       {/* ── Report Header with Verdict ── */}
-      <div className={`rounded-xl border-l-4 p-4 sm:p-5 ${getVerdictColor(report.verdict.status)}`}>
+      {isRescored && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200">
+          <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+          <p className="text-xs text-emerald-700">
+            Score updated: <span className="font-bold">{report.plagiarism.similarityScore}%</span>
+            {' '}→ <span className="font-bold">{displayReport.plagiarism.similarityScore}%</span>
+            {scoreDiff !== null && scoreDiff !== 0 && (
+              <span className="ml-1">({scoreDiff < 0 ? '↓' : '↑'} {Math.abs(scoreDiff)}%)</span>
+            )}
+          </p>
+        </div>
+      )}
+
+      {/* ── Report Header with Verdict ── */}
+      <div className={`rounded-xl border-l-4 p-4 sm:p-5 ${getVerdictIconColor(report.verdict.status)}`}>
         <div className="flex items-start gap-3">
+  {/* End Originality tab content - closing tags added at end */}
           <AlertTriangle className={`h-5 w-5 mt-0.5 shrink-0 ${getVerdictIconColor(report.verdict.status)}`} />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -1014,7 +1164,13 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
             {totalWords > 0 && (
               <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground flex-wrap">
                 <span>{totalWords} words total</span>
-                <span className="font-medium text-gray-700">{matchedWords} matched</span>
+                <span className="font-medium text-gray-700">{matchedWords} matched
+              {isRescored && (
+                <Badge variant="outline" className="text-[10px] ml-1.5 px-1.5 py-0 h-4 border-emerald-300 text-emerald-700 bg-emerald-50">
+                  Updated
+                </Badge>
+              )}
+            </span>
                 {excludedWords > 0 && (
                   <span className="flex items-center gap-1">
                     <Ban className="h-3 w-3" />
@@ -1036,6 +1192,19 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
           </div>
         </div>
       </div>
+
+      {/* ── Post-Scan Exclusion Controls ── */}
+      {documentContent && sourceBreakdown.length > 0 && (
+        <PostScanExclusions
+          currentExclusions={postScanExclusionSettings}
+          onExclusionsChange={handleExclusionsChange}
+          onRescore={handleRescore}
+          documentId={report.documentId}
+          originalContent={documentContent}
+          sources={postScanSources}
+          originalScore={report.plagiarism.similarityScore}
+        />
+      )}
 
       {/* ── Download Highlighted Report Button ── */}
       <div className="flex justify-end">
@@ -1065,8 +1234,8 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
           <div className="flex flex-col md:flex-row items-center gap-6 md:gap-10">
             {/* Similarity Score Circle */}
             <SimilarityScoreCircle
-              score={report.plagiarism.similarityScore}
-              label="Similarity Index"
+              score={displayReport.plagiarism.similarityScore}
+              label={isRescored ? 'Updated Score' : 'Similarity Index'}
               size={130}
             />
 
@@ -1082,13 +1251,13 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
               {/* Similarity label */}
               <div>
                 <div className="flex items-center gap-2 mb-1">
-                  <ShieldCheck className={`h-4 w-4 ${getSimScoreColor(report.plagiarism.similarityScore)}`} />
-                  <span className={`text-xl font-bold ${getSimScoreColor(report.plagiarism.similarityScore)}`}>
-                    {report.plagiarism.similarityScore}%
+                  <ShieldCheck className={`h-4 w-4 ${getSimScoreColor(displayReport.plagiarism.similarityScore)}`} />
+                  <span className={`text-xl font-bold ${getSimScoreColor(displayReport.plagiarism.similarityScore)}`}>
+                    {displayReport.plagiarism.similarityScore}%
                   </span>
                 </div>
-                <p className={`text-xs font-medium ${getSimScoreColor(report.plagiarism.similarityScore)}`}>
-                  {getSimScoreLabel(report.plagiarism.similarityScore)}
+                <p className={`text-xs font-medium ${getSimScoreColor(displayReport.plagiarism.similarityScore)}`}>
+                  {getSimScoreLabel(displayReport.plagiarism.similarityScore)}
                 </p>
               </div>
 
@@ -1146,6 +1315,34 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
         </CardContent>
       </Card>
 
+      {/* ── Comparison Tab Content ── */}
+        </TabsContent>
+
+        <TabsContent value="comparison" className="mt-6">
+          {documentContent && matchRegions.length > 0 ? (
+            <SideBySideComparison
+              documentContent={documentContent}
+              matchRegions={sbsMatchRegions}
+              sourceBreakdown={sbsSourceBreakdown}
+              selectedSourceId={comparisonSourceId || undefined}
+              onBack={handleBackToReport}
+            />
+          ) : (
+            <div className="text-center py-12">
+              <Columns className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-lg font-bold mb-2">No Sources to Compare</h3>
+              <p className="text-sm text-muted-foreground mb-4">
+                No matching sources were found in this scan. Run a scan first to enable source comparison.
+              </p>
+              <Button variant="outline" onClick={() => setActiveTab('originality')}>
+                <FileText className="h-4 w-4 mr-2" />
+                View Originality Report
+              </Button>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
+
       {/* ── Two-Column Layout: Document Viewer + Source Panel ── */}
       {documentContent && matchRegions.length > 0 && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -1181,6 +1378,7 @@ export function PlagiarismReport({ report, documentContent }: PlagiarismReportPr
                 sourceBreakdown={sourceBreakdown}
                 activeSourceId={activeSourceId}
                 onSourceClick={handleSourceClick}
+                onCompare={handleCompareSource}
                 matchRegions={matchRegions}
               />
             </div>

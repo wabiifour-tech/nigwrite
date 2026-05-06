@@ -11,7 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { WinnowingEngine, DEFAULT_EXCLUSION_SETTINGS, type CorpusMatchEntry } from '@/lib/winnowing-engine';
-import { getFingerprintStore, type FingerprintEntry } from '@/lib/fingerprint-store';
+import { getPersistentFingerprintStore } from '@/lib/persistent-fingerprint-store';
 import { generateHighlightedDocument, type HighlightedMatchRegion, type HighlightedSourceBreakdown } from '@/lib/highlighted-doc-generator';
 
 export async function POST(request: NextRequest) {
@@ -85,13 +85,13 @@ async function handleHighlightedDocxExport(report: {
 
   // Re-run a quick scan against the local corpus to get matchRegions and sourceBreakdown
   const winnowing = new WinnowingEngine();
-  const store = getFingerprintStore();
+  const store = await getPersistentFingerprintStore();
 
   const { cleanedText, excludedWordCount } = winnowing.applyExclusions(content, DEFAULT_EXCLUSION_SETTINGS);
   const fingerprints = winnowing.generateFingerprints(cleanedText);
 
   // Search local corpus
-  const corpusMatchMap = store.search(fingerprints.map(fp => fp.hash));
+  const corpusMatchMap = await store.search(fingerprints.map(fp => fp.hash));
   const corpusMatches = new Map<number, CorpusMatchEntry[]>();
   for (const [hash, entries] of corpusMatchMap) {
     corpusMatches.set(hash, entries.map(e => ({

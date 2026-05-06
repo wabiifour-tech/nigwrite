@@ -14,7 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { WinnowingEngine, type CorpusMatchEntry, type ExclusionSettings, DEFAULT_EXCLUSION_SETTINGS } from '@/lib/winnowing-engine';
 import { AIDetector } from '@/lib/ai-detector';
-import { getFingerprintStore, type FingerprintEntry } from '@/lib/fingerprint-store';
+import { getPersistentFingerprintStore, type FingerprintEntry } from '@/lib/persistent-fingerprint-store';
 import { db } from '@/lib/db';
 import ZAI from 'z-ai-web-dev-sdk';
 
@@ -363,7 +363,7 @@ async function runScanPipeline(
 ) {
   const winnowing = new WinnowingEngine();
   const aiDetector = new AIDetector();
-  const store = getFingerprintStore();
+  const store = await getPersistentFingerprintStore();
 
   const settings: ExclusionSettings = {
     ...DEFAULT_EXCLUSION_SETTINGS,
@@ -375,7 +375,7 @@ async function runScanPipeline(
   const fingerprints = winnowing.generateFingerprints(cleanedText);
 
   // ── Stage 2: Local Corpus Matching ──
-  const corpusMatchMap = store.search(fingerprints.map(fp => fp.hash));
+  const corpusMatchMap = await store.search(fingerprints.map(fp => fp.hash));
 
   // Convert to CorpusMatchEntry format
   const corpusMatches = new Map<number, CorpusMatchEntry[]>();
@@ -477,11 +477,12 @@ async function runScanPipeline(
 
   // ── Stage 7: Index user submission for future cross-checking ──
   try {
-    store.addUserDocument(
+    await store.addUserDocument(
       `user-doc-${document.id}`,
       title || 'Untitled Document',
       content,
       'student_paper',
+      userId,
     );
   } catch {
     // Indexing failure should not block the scan response

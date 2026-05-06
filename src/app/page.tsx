@@ -24,6 +24,17 @@ import { Footer } from '@/components/Footer';
 import { PlagiarismReport } from '@/components/PlagiarismReport';
 import { ExportButton } from '@/components/ExportButton';
 import { BatchScanProgress, BatchFileItem } from '@/components/BatchScanProgress';
+import StudentDashboard from '@/components/student/StudentDashboard';
+import SubmissionHistory from '@/components/student/SubmissionHistory';
+import StudentCourses from '@/components/student/StudentCourses';
+import SubmissionReceipt from '@/components/student/SubmissionReceipt';
+import StudentProfile from '@/components/student/StudentProfile';
+import SelfCheck from '@/components/student/SelfCheck';
+import { AdminDashboard } from '@/components/admin/AdminDashboard';
+import { UserManagement } from '@/components/admin/UserManagement';
+import { CourseManagement } from '@/components/admin/CourseManagement';
+import { AuditLogViewer } from '@/components/admin/AuditLogViewer';
+import { SettingsPanel } from '@/components/admin/SettingsPanel';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
@@ -33,6 +44,15 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
+import { GradingToolbar } from '@/components/grading/GradingToolbar';
+import { InlineCommentTool } from '@/components/grading/InlineCommentTool';
+import { QuickMarksPanel } from '@/components/grading/QuickMarksPanel';
+import { RubricGradingModal } from '@/components/grading/RubricGradingModal';
+import { VoiceCommentRecorder } from '@/components/grading/VoiceCommentRecorder';
+import { VersionHistory } from '@/components/VersionHistory';
+import { VersionDiffViewer } from '@/components/VersionDiffViewer';
+import { ShareReportDialog } from '@/components/ShareReportDialog';
+import { StudentSubmissionHistory } from '@/components/StudentSubmissionHistory';
 import {
   Upload,
   Search,
@@ -65,6 +85,10 @@ import {
   Quote,
   BookMarked,
   TextQuote,
+  ArrowLeft,
+  ListChecks,
+  GitBranch,
+  History,
 } from 'lucide-react';
 
 // ──────────────────────────────────────────────
@@ -189,9 +213,26 @@ interface SubmissionData {
   student: { id: string; name: string | null; email: string } | null;
   report: { id: string; similarityScore: number; aiScore: number } | null;
   status: string;
-  grade: string | null;
+  grade: number | string | null;
   feedback: string | null;
+  feedbackSummary?: string | null;
+  letterGrade?: string | null;
   createdAt: string;
+}
+
+interface GradingRubricData {
+  id: string;
+  title: string;
+  description: string | null;
+  criteria: Array<{
+    id: string;
+    title: string;
+    description: string | null;
+    maxScore: number;
+    weight: number;
+    levels: Array<{ id: string; label: string; description: string; score: number; order: number }>;
+    order: number;
+  }>;
 }
 
 // ──────────────────────────────────────────────
@@ -238,9 +279,39 @@ export default function NigWriteApp() {
   const [newAssignment, setNewAssignment] = useState({ title: '', description: '', courseId: '', deadline: '' });
   const [gradingFeedback, setGradingFeedback] = useState<Record<string, string>>({});
 
+  // Grading view state
+  const [gradingSubmissionId, setGradingSubmissionId] = useState<string | null>(null);
+  const [gradingSubmission, setGradingSubmission] = useState<SubmissionData | null>(null);
+  const [gradingAssignmentId, setGradingAssignmentId] = useState<string | null>(null);
+  const [gradingDocumentContent, setGradingDocumentContent] = useState<string>('');
+  const [gradingViewMode, setGradingViewMode] = useState<'grading' | 'originality'>('grading');
+  const [showRubricModal, setShowRubricModal] = useState(false);
+  const [gradingRubric, setGradingRubric] = useState<GradingRubricData | null>(null);
+  const [saveAsQuickMarkText, setSaveAsQuickMarkText] = useState<string | null>(null);
+  const [inlineComments, setInlineComments] = useState<Array<{
+    id: string;
+    text: string;
+    position: number;
+    rangeLength: number;
+    color: string;
+    isResolved: boolean;
+    user?: { name: string | null; email: string } | null;
+    createdAt: string;
+  }>>([]);
+  const [voiceComments, setVoiceComments] = useState<Array<{
+    id: string;
+    audioData: string;
+    duration: number;
+    user?: { name: string | null; email: string } | null;
+    createdAt: string;
+  }>>([]);
+
   // Exclusion settings state with localStorage persistence
   const [exclusionSettings, setExclusionSettings] = useState<ExclusionSettings>(DEFAULT_EXCLUSION_SETTINGS);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+
+  // Admin view state
+  const [adminTab, setAdminTab] = useState('dashboard');
 
   // Load exclusion settings from localStorage on mount
   useEffect(() => {
@@ -293,7 +364,23 @@ export default function NigWriteApp() {
       if (result.success && result.data) {
         setScanProgress({ stage: 'complete', progress: 100, message: 'Scan complete!' });
         setReportData(result.data);
-        setCurrentView('report');
+
+        // If navigating from student dashboard/selfcheck, show receipt too
+        const isStudentView = ['student-dashboard', 'selfcheck', 'courses', 'scan'].includes(currentView);
+        if (isStudentView) {
+          setReceiptData({
+            title: result.data.title,
+            wordCount: result.data.plagiarism?.totalWords || scanContent.split(/\s+/).filter(w => w.length > 0).length,
+            fileName: uploadedFileName || `${scanTitle || 'Document'}.txt`,
+            reportId: result.data.reportId,
+            similarityScore: result.data.plagiarism?.similarityScore,
+            aiScore: result.data.aiDetection?.aiProbability,
+          });
+          setShowReceipt(true);
+          setCurrentView('receipt');
+        } else {
+          setCurrentView('report');
+        }
       } else {
         setScanError(result.error || 'Scan failed. Please try again.');
       }
@@ -583,23 +670,21 @@ export default function NigWriteApp() {
   const handleGradeSubmission = useCallback(async (submissionId: string, assignmentId: string) => {
     const feedback = gradingFeedback[submissionId] || '';
     try {
-      // Use the scan API to simulate grading — just store the feedback via submission update
-      // Since we don't have a PATCH endpoint, we'll use POST to notifications as a workaround
-      // In a real app this would be PATCH /api/submissions/:id
-      await fetch('/api/notifications', {
+      await fetch('/api/grading', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title: 'Submission Graded',
-          message: `Feedback: ${feedback || 'Reviewed'}`,
-          type: 'success',
+          submissionId,
+          gradedBy: 'instructor',
+          grade: 0,
+          feedbackSummary: feedback || undefined,
         }),
       });
       setSubmissions(prev => ({
         ...prev,
         [assignmentId]: prev[assignmentId]?.map(s =>
           s.id === submissionId
-            ? { ...s, status: 'graded', feedback: feedback || 'Reviewed', grade: feedback ? 'Completed' : 'Reviewed' }
+            ? { ...s, status: 'graded', feedback: feedback || 'Reviewed' }
             : s
         ) || [],
       }));
@@ -612,6 +697,91 @@ export default function NigWriteApp() {
       // silent
     }
   }, [gradingFeedback]);
+
+  const handleOpenGradingView = useCallback(async (submission: SubmissionData, assignmentId: string) => {
+    setGradingSubmissionId(submission.id);
+    setGradingSubmission(submission);
+    setGradingAssignmentId(assignmentId);
+    setGradingViewMode('grading');
+    setInlineComments([]);
+    setVoiceComments([]);
+    setSaveAsQuickMarkText(null);
+
+    // Fetch document content
+    try {
+      const docRes = await fetch(`/api/documents/${submission.document.id}`);
+      if (docRes.ok) {
+        const docResult = await docRes.json();
+        if (docResult.success) {
+          setGradingDocumentContent(docResult.data.contentBody || '');
+        }
+      }
+    } catch { /* use empty */ }
+
+    // Fetch inline comments
+    try {
+      const commentsRes = await fetch(`/api/comments/inline?submissionId=${submission.id}`);
+      if (commentsRes.ok) {
+        const commentsResult = await commentsRes.json();
+        if (commentsResult.success) {
+          setInlineComments(commentsResult.data);
+        }
+      }
+    } catch { /* empty */ }
+
+    // Fetch voice comments
+    try {
+      const voiceRes = await fetch(`/api/comments/voice?submissionId=${submission.id}`);
+      if (voiceRes.ok) {
+        const voiceResult = await voiceRes.json();
+        if (voiceResult.success) {
+          setVoiceComments(voiceResult.data);
+        }
+      }
+    } catch { /* empty */ }
+
+    // Fetch rubric for this assignment
+    try {
+      const rubricRes = await fetch(`/api/rubrics?assignmentId=${assignmentId}`);
+      if (rubricRes.ok) {
+        const rubricResult = await rubricRes.json();
+        if (rubricResult.success && rubricResult.data.length > 0) {
+          setGradingRubric(rubricResult.data[0]);
+        } else {
+          setGradingRubric(null);
+        }
+      }
+    } catch { /* empty */ }
+
+    setCurrentView('grading-view');
+  }, []);
+
+  const handleCloseGradingView = useCallback(() => {
+ setCurrentView('instructor');
+    setGradingSubmissionId(null);
+    setGradingSubmission(null);
+  }, []);
+
+  const handleGradeSaved = useCallback((grade: number, letterGrade: string, feedback: string) => {
+    if (gradingSubmission && gradingAssignmentId) {
+      setGradingSubmission(prev => prev ? { ...prev, grade, letterGrade, feedbackSummary: feedback, status: 'graded' } : null);
+      setSubmissions(prev => ({
+        ...prev,
+        [gradingAssignmentId]: prev[gradingAssignmentId]?.map(s =>
+          s.id === gradingSubmission.id
+            ? { ...s, grade, letterGrade, feedback: feedback || 'Reviewed', status: 'graded' }
+            : s
+        ) || [],
+      }));
+    }
+  }, [gradingSubmission, gradingAssignmentId]);
+
+  const handleRubricScoresSaved = useCallback((_scores: unknown[]) => {
+    // Refresh the grading view
+    if (gradingSubmission) {
+      handleGradeSaved(0, '', '');
+    }
+  }, [gradingSubmission, handleGradeSaved]);
 
   const toggleAssignmentExpand = useCallback((assignmentId: string) => {
     setExpandedAssignment(prev => prev === assignmentId ? null : assignmentId);
@@ -1109,9 +1279,14 @@ export default function NigWriteApp() {
               Scanned on {new Date(reportData.createdAt).toLocaleString()}
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            <ShareReportDialog reportId={reportData.reportId} userId="" reportTitle={reportData.title} />
             <ExportButton reportId={reportData.reportId} format="html" />
             <ExportButton reportId={reportData.reportId} format="text" label="Text Report" />
+            <Button variant="outline" size="sm" onClick={() => handleViewChange('student-history')}>
+              <History className="h-3.5 w-3.5 mr-1.5" />
+              History
+            </Button>
             <Button variant="outline" size="sm" onClick={() => handleViewChange('scan')}>
               <Search className="h-3.5 w-3.5 mr-1.5" />
               New Scan
@@ -1556,10 +1731,15 @@ export default function NigWriteApp() {
                         ) : (
                           <div className="space-y-3">
                             {subs.map((sub) => (
-                              <div key={sub.id} className="p-3 rounded-lg border bg-background">
+                              <div key={sub.id} className="p-3 rounded-lg border bg-background hover:shadow-sm transition-shadow">
                                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
                                   <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-medium truncate">{sub.document.title}</p>
+                                    <button
+                                      className="text-left w-full"
+                                      onClick={() => handleOpenGradingView(sub, assignment.id)}
+                                    >
+                                      <p className="text-sm font-medium truncate hover:text-[#008751] transition-colors">{sub.document.title}</p>
+                                    </button>
                                     <p className="text-xs text-muted-foreground">
                                       {sub.student?.name || sub.student?.email || 'Unknown Student'}
                                       {' — '}
@@ -1589,6 +1769,15 @@ export default function NigWriteApp() {
                                         </div>
                                       </>
                                     )}
+                                    {sub.grade !== null && (
+                                      <div className="text-center">
+                                        <span className="text-xs font-bold text-[#008751]">
+                                          {sub.letterGrade && `${sub.letterGrade} `}
+                                          {typeof sub.grade === 'number' ? sub.grade : sub.grade}
+                                        </span>
+                                        <div className="text-[10px] text-muted-foreground">Grade</div>
+                                      </div>
+                                    )}
                                     <Badge
                                       variant={
                                         sub.status === 'graded' ? 'default' :
@@ -1598,28 +1787,17 @@ export default function NigWriteApp() {
                                     >
                                       {sub.status}
                                     </Badge>
-                                  </div>
-                                </div>
-
-                                {/* Grading interface */}
-                                {sub.status !== 'graded' && (
-                                  <div className="flex gap-2 mt-2">
-                                    <Input
-                                      placeholder="Enter feedback..."
-                                      value={gradingFeedback[sub.id] || ''}
-                                      onChange={(e) => setGradingFeedback(prev => ({ ...prev, [sub.id]: e.target.value }))}
-                                      className="flex-1 h-8 text-sm"
-                                    />
                                     <Button
                                       size="sm"
-                                      onClick={() => handleGradeSubmission(sub.id, assignment.id)}
-                                      className="gap-1 bg-[#008751] hover:bg-[#006b40]"
+                                      variant="outline"
+                                      onClick={() => handleOpenGradingView(sub, assignment.id)}
+                                      className="gap-1 text-xs h-7"
                                     >
-                                      <CheckCircle2 className="h-3 w-3" />
+                                      <Eye className="h-3 w-3" />
                                       Grade
                                     </Button>
                                   </div>
-                                )}
+                                </div>
 
                                 {/* Show existing feedback */}
                                 {sub.feedback && (
@@ -1640,6 +1818,145 @@ export default function NigWriteApp() {
               );
             })}
           </div>
+        )}
+      </div>
+    );
+  };
+
+  // ──────────────────────────────────────────────
+  // View: Grading Interface (GradeMark-style)
+  // ──────────────────────────────────────────────
+  const renderGradingView = () => {
+    if (!gradingSubmission || !gradingSubmissionId || !gradingAssignmentId) {
+      return (
+        <div className="max-w-3xl mx-auto py-16 px-4 text-center">
+          <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+          <h2 className="text-xl font-bold mb-2">No Submission Selected</h2>
+          <p className="text-muted-foreground mb-4">Go back to the instructor dashboard.</p>
+          <Button onClick={handleCloseGradingView} className="bg-[#008751] hover:bg-[#006b40]">
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back to Dashboard
+          </Button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="max-w-6xl mx-auto py-4 px-4 space-y-4">
+        {/* Top Bar with Back Button + Submission Info */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <Button variant="outline" size="sm" onClick={handleCloseGradingView} className="gap-1">
+            <ArrowLeft className="h-4 w-4" />
+            Back
+          </Button>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-lg font-bold truncate">{gradingSubmission.document.title}</h2>
+            <p className="text-xs text-muted-foreground">
+              {gradingSubmission.student?.name || gradingSubmission.student?.email || 'Unknown Student'}
+              {' — '}{new Date(gradingSubmission.createdAt).toLocaleString()}
+            </p>
+          </div>
+          {/* View Mode Toggle */}
+          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+            <button
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                gradingViewMode === 'grading'
+                  ? 'bg-white shadow-sm text-[#008751]'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setGradingViewMode('grading')}
+            >
+              Grading View
+            </button>
+            <button
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                gradingViewMode === 'originality'
+                  ? 'bg-white shadow-sm text-[#008751]'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setGradingViewMode('originality')}
+            >
+              Originality View
+            </button>
+          </div>
+        </div>
+
+        {/* Grading Toolbar */}
+        {gradingViewMode === 'grading' && (
+          <GradingToolbar
+            submissionId={gradingSubmissionId}
+            assignmentId={gradingAssignmentId}
+            initialGrade={typeof gradingSubmission.grade === 'number' ? gradingSubmission.grade : null}
+            initialFeedback={gradingSubmission.feedbackSummary || gradingSubmission.feedback || null}
+            gradeScale="0-100"
+            maxGrade={100}
+            rubricId={gradingRubric?.id || null}
+            onOpenRubric={() => {
+              if (gradingRubric) setShowRubricModal(true);
+            }}
+            onGradeSaved={handleGradeSaved}
+            userId="instructor"
+          />
+        )}
+
+        {/* Main Content Area */}
+        <div className="flex gap-4 flex-col lg:flex-row">
+          {/* Document / Comment Area */}
+          <div className="flex-1 min-w-0 space-y-4">
+            {gradingViewMode === 'grading' ? (
+              <InlineCommentTool
+                documentContent={gradingDocumentContent}
+                submissionId={gradingSubmissionId}
+                userId="instructor"
+                comments={inlineComments}
+                onSaveAsQuickMark={(text) => setSaveAsQuickMarkText(text)}
+              />
+            ) : (
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="max-h-[600px] overflow-y-auto">
+                    <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                      {gradingDocumentContent || 'No document content available.'}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Voice Comment Recorder */}
+            {gradingViewMode === 'grading' && (
+              <VoiceCommentRecorder
+                submissionId={gradingSubmissionId}
+                userId="instructor"
+                existingVoiceComments={voiceComments}
+              />
+            )}
+          </div>
+
+          {/* QuickMarks Panel */}
+          {gradingViewMode === 'grading' && (
+            <div className="shrink-0">
+              <QuickMarksPanel
+                userId="instructor"
+                onSelectQuickMark={(_text, _color) => {
+                  // Quick mark selected - will be placed in inline comment
+                }}
+                onNewCommentText={saveAsQuickMarkText}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Rubric Modal */}
+        {gradingRubric && (
+          <RubricGradingModal
+            open={showRubricModal}
+            onOpenChange={setShowRubricModal}
+            rubric={gradingRubric}
+            submissionId={gradingSubmissionId}
+            userId="instructor"
+            onScoresSaved={handleRubricScoresSaved}
+          />
         )}
       </div>
     );
@@ -1774,6 +2091,181 @@ export default function NigWriteApp() {
   // ──────────────────────────────────────────────
   // Render
   // ──────────────────────────────────────────────
+  // ──────────────────────────────────────────────
+  // View: Admin Dashboard
+  // ──────────────────────────────────────────────
+  const renderAdmin = () => {
+    const tabs = [
+      { id: 'dashboard', label: 'Dashboard' },
+      { id: 'users', label: 'Users' },
+      { id: 'courses', label: 'Courses' },
+      { id: 'audit-logs', label: 'Audit Logs' },
+      { id: 'settings', label: 'Settings' },
+    ];
+
+    return (
+      <div className="max-w-7xl mx-auto py-8 px-4 space-y-6">
+        {/* Admin Tabs */}
+        <div className="flex overflow-x-auto gap-1 border-b pb-0">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setAdminTab(tab.id)}
+              className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors border-b-2 -mb-px ${
+                adminTab === tab.id
+                  ? 'border-[#008751] text-[#008751]'
+                  : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Admin Tab Content */}
+        {adminTab === 'dashboard' && <AdminDashboard onNavigate={(tab) => setAdminTab(tab)} />}
+        {adminTab === 'users' && <UserManagement />}
+        {adminTab === 'courses' && <CourseManagement />}
+        {adminTab === 'audit-logs' && <AuditLogViewer />}
+        {adminTab === 'settings' && <SettingsPanel />}
+      </div>
+    );
+  };
+
+  const [showReceipt, setShowReceipt] = useState(false);
+  const [receiptData, setReceiptData] = useState<{ title: string; wordCount: number; fileName: string; reportId: string; similarityScore?: number; aiScore?: number } | null>(null);
+
+  // Resubmission / Version History state
+  const [resubmitContent, setResubmitContent] = useState('');
+  const [resubmitTitle, setResubmitTitle] = useState('');
+  const [showResubmitDialog, setShowResubmitDialog] = useState(false);
+  const [resubmitParentId, setResubmitParentId] = useState('');
+  const [isResubmitting, setIsResubmitting] = useState(false);
+  const [resubmitError, setResubmitError] = useState('');
+
+  // Diff viewer state
+  const [diffVersions, setDiffVersions] = useState<{ v1Id: string; v2Id: string } | null>(null);
+  const [showDiffView, setShowDiffView] = useState(false);
+
+  // Student submission history view
+  const [showStudentHistory, setShowStudentHistory] = useState(false);
+
+  // Receipt info for new submissions
+  const [receiptInfo, setReceiptInfo] = useState<{ submissionId: string; title: string; assignment: string; timestamp: string; wordCount: number } | null>(null);
+
+  // Listen for resubmit events from VersionHistory component
+  useEffect(() => {
+    const handler = ((e: CustomEvent) => {
+      setResubmitParentId(e.detail.submissionId);
+      setShowResubmitDialog(true);
+    }) as EventListener;
+    window.addEventListener('nigwrite:resubmit', handler);
+    return () => window.removeEventListener('nigwrite:resubmit', handler);
+  }, []);
+
+  const handleResubmit = useCallback(async () => {
+    if (!resubmitContent.trim() || !resubmitParentId) return;
+    setIsResubmitting(true);
+    setResubmitError('');
+    try {
+      const response = await fetch('/api/submissions/resubmit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parentSubmissionId: resubmitParentId,
+          content: resubmitContent,
+          title: resubmitTitle || undefined,
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        setShowResubmitDialog(false);
+        setResubmitContent('');
+        setResubmitTitle('');
+        if (result.data) {
+          setReceiptInfo({
+            submissionId: result.data.id,
+            title: result.data.document.title,
+            assignment: result.data.assignment?.title || 'Assignment',
+            timestamp: result.data.createdAt,
+            wordCount: resubmitContent.split(/\s+/).filter(w => w.length > 0).length,
+          });
+          setShowReceipt(true);
+        }
+      } else {
+        setResubmitError(result.error || 'Resubmission failed');
+      }
+    } catch {
+      setResubmitError('Network error. Please try again.');
+    } finally {
+      setIsResubmitting(false);
+    }
+  }, [resubmitContent, resubmitTitle, resubmitParentId]);
+
+  const [userName, setUserName] = useState('Student');
+
+  // Load user name from session
+  useEffect(() => {
+    async function loadUser() {
+      try {
+        const res = await fetch('/api/auth/session');
+        const data = await res.json();
+        if (data.success && data.user?.name) {
+          setUserName(data.user.name);
+        }
+      } catch {
+        // use default
+      }
+    }
+    loadUser();
+  }, []);
+
+  const renderStudentDashboard = () => (
+    <StudentDashboard userName={userName} onViewChange={handleViewChange} />
+  );
+
+  const renderStudentHistory = () => (
+    <SubmissionHistory onViewReport={(reportId) => { setReportData(null); setCurrentView('report'); }} />
+  );
+
+  const renderStudentCourses = () => <StudentCourses />;
+
+  const renderStudentProfile = () => <StudentProfile />;
+
+  const renderSelfCheck = () => (
+    <SelfCheck
+      onSubmitToAssignment={() => {
+        setShowReceipt(false);
+        setCurrentView('scan');
+      }}
+    />
+  );
+
+  const renderReceiptView = () => {
+    if (!receiptData) return renderScan();
+    return (
+      <div className="max-w-lg mx-auto py-8 px-4 space-y-6">
+        <SubmissionReceipt
+          documentTitle={receiptData.title}
+          wordCount={receiptData.wordCount}
+          fileName={receiptData.fileName}
+          reportId={receiptData.reportId}
+          similarityScore={receiptData.similarityScore}
+          aiScore={receiptData.aiScore}
+          onViewReport={() => { setShowReceipt(false); setCurrentView('report'); }}
+        />
+        <div className="flex justify-center gap-3">
+          <Button variant="outline" onClick={() => { setShowReceipt(false); setCurrentView('student-dashboard'); }}>
+            Back to Dashboard
+          </Button>
+          <Button className="bg-[#008751] hover:bg-[#006b40]" onClick={() => { setShowReceipt(false); setCurrentView('report'); }}>
+            View Full Report
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
   const renderView = () => {
     switch (currentView) {
       case 'scan': return renderScan();
@@ -1782,10 +2274,133 @@ export default function NigWriteApp() {
       case 'documents': return renderDocuments();
       case 'search': return renderSearch();
       case 'instructor': return renderInstructor();
+      case 'grading-view': return renderGradingView();
+      case 'admin': return renderAdmin();
       case 'about': return renderAbout();
+      case 'student-dashboard': return renderStudentDashboard();
+      case 'history': return renderStudentHistory();
+      case 'courses': return renderStudentCourses();
+      case 'profile': return renderStudentProfile();
+      case 'selfcheck': return renderSelfCheck();
+      case 'receipt': return renderReceiptView();
+      case 'student-history': return renderStudentSubmissionHistory();
+      case 'version-diff': return renderVersionDiff();
+      case 'resubmit': return renderResubmitDialogView();
       default: return renderHome();
     }
   };
+
+  // ──────────────────────────────────────────────
+  // View: Student Submission History
+  // ──────────────────────────────────────────────
+  const renderStudentSubmissionHistory = () => (
+    <div className="max-w-5xl mx-auto py-8 px-4 space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold">Submission History</h2>
+          <p className="text-muted-foreground">All your submissions across assignments</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => handleViewChange('dashboard')}>
+          Back
+        </Button>
+      </div>
+      <StudentSubmissionHistory
+        onViewReport={(submissionId, reportId) => {
+          handleViewChange('report');
+        }}
+      />
+    </div>
+  );
+
+  // ──────────────────────────────────────────────
+  // View: Version Diff
+  // ──────────────────────────────────────────────
+  const renderVersionDiff = () => {
+    if (!diffVersions) {
+      handleViewChange('report');
+      return null;
+    }
+    return (
+      <div className="max-w-5xl mx-auto py-8 px-4 space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <GitBranch className="h-5 w-5 text-[#008751]" />
+            <h2 className="text-2xl font-bold">Version Comparison</h2>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => { setShowDiffView(false); handleViewChange('report'); }}>
+            Back to Report
+          </Button>
+        </div>
+        <VersionDiffViewer
+          version1Id={diffVersions.v1Id}
+          version2Id={diffVersions.v2Id}
+          onClose={() => { setShowDiffView(false); handleViewChange('report'); }}
+        />
+      </div>
+    );
+  };
+
+  // ──────────────────────────────────────────────
+  // View: Resubmit Dialog
+  // ──────────────────────────────────────────────
+  const renderResubmitDialogView = () => (
+    <div className="max-w-2xl mx-auto py-8 px-4">
+      <div className="flex items-center gap-2 mb-6">
+        <GitBranch className="h-5 w-5 text-[#008751]" />
+        <h2 className="text-2xl font-bold">Submit New Version</h2>
+      </div>
+      <Card className="space-y-4">
+        <CardContent className="pt-6 space-y-4">
+          <div>
+            <Label className="mb-1.5 block">Document Title</Label>
+            <Input
+              placeholder="e.g., Research Paper on Machine Learning (v2)"
+              value={resubmitTitle}
+              onChange={(e) => setResubmitTitle(e.target.value)}
+            />
+          </div>
+          <div>
+            <Label className="mb-1.5 block">Updated Content</Label>
+            <Textarea
+              placeholder="Paste your updated document content here..."
+              value={resubmitContent}
+              onChange={(e) => setResubmitContent(e.target.value)}
+              className="min-h-[250px] font-mono text-sm"
+            />
+            <div className="flex justify-between mt-1">
+              <span className="text-xs text-muted-foreground">
+                {resubmitContent.split(/\s+/).filter(w => w.length > 0).length} words
+              </span>
+            </div>
+          </div>
+          {resubmitError && (
+            <div className="p-3 rounded-lg bg-red-50 border border-red-200">
+              <p className="text-sm text-red-700">{resubmitError}</p>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => { setShowResubmitDialog(false); setResubmitContent(''); setResubmitTitle(''); setResubmitError(''); }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleResubmit}
+              disabled={isResubmitting || resubmitContent.trim().length < 10}
+              className="gap-1.5 bg-[#008751] hover:bg-[#006b40]"
+            >
+              {isResubmitting ? (
+                <><Loader2 className="h-4 w-4 animate-spin" /> Submitting...</>
+              ) : (
+                <><Plus className="h-4 w-4" /> Submit New Version</>
+              )}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
 
   return (
     <div className="min-h-screen flex flex-col">
