@@ -458,10 +458,14 @@ export default function NigWriteApp() {
           setScanError(`Partial text extracted from ${file.name}. For best results, copy and paste your text directly.`);
         }
       } else {
-        setScanError(result.error || 'Upload failed.');
+        const errorMsg = response.status === 429
+          ? 'Too many upload attempts. Please wait a moment and try again.'
+          : (result.error || 'Upload failed.');
+        setScanError(errorMsg);
       }
-    } catch {
-      setScanError('Failed to upload file. Please try again.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Network error. Please check your connection.';
+      setScanError(`Upload failed: ${msg}`);
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -1056,7 +1060,7 @@ export default function NigWriteApp() {
                   <FileUp className="h-8 w-8 text-muted-foreground" />
                   <p className="text-sm font-medium">Click to upload your document</p>
                   <p className="text-xs text-muted-foreground">
-                    Supports .txt, .md, .csv, .pdf, .docx (max 10MB)
+                    Supports .txt, .md, .csv, .pdf, .docx — no size limit
                   </p>
                 </div>
               )}

@@ -13,7 +13,7 @@ const LIMITS: Record<string, LimitConfig> = {
   scan: { maxRequests: 10, windowMs: 60_000 },
   correct: { maxRequests: 5, windowMs: 60_000 },
   "ai-detect": { maxRequests: 15, windowMs: 60_000 },
-  upload: { maxRequests: 5, windowMs: 60_000 },
+  upload: { maxRequests: 100, windowMs: 60_000 },
   documents: { maxRequests: 20, windowMs: 60_000 },
   default: { maxRequests: 30, windowMs: 60_000 },
 };

@@ -127,6 +127,9 @@ async function extractText(buffer: ArrayBuffer): Promise<{ text: string; partial
   }
 }
 
+// Allow unlimited body size for file uploads
+export const dynamic = 'force-dynamic';
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();

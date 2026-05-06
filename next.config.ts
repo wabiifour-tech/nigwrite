@@ -57,7 +57,10 @@ const nextConfig: NextConfig = {
     serverActions: {
       bodySizeLimit: '9999mb',
     },
+    // Allow unlimited body size for API route handlers (file uploads)
+    proxyClientMaxBodySize: '9999mb',
   },
+  serverExternalPackages: ['mammoth', 'pdf-parse'],
   async headers() {
     return [
       {
