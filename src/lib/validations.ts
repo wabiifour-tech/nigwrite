@@ -17,7 +17,7 @@ export const scanSchema = z.object({
   content: z
     .string()
     .min(50, "Content must be at least 50 characters long")
-    .max(500_000, "Content must be 500,000 characters or less"),
+    .max(50_000_000, "Content is too large"), // No practical limit
   userId: z.string().optional(),
 });
 
@@ -47,7 +47,7 @@ export const aiDetectSchema = z.object({
  * (File binary data is handled separately via FormData.)
  */
 export const uploadSchema = z.object({
-  fileSize: z.number().max(10 * 1024 * 1024, "File must be 10MB or less"),
+  fileSize: z.number(), // No size restriction — any file size accepted
   fileType: z.enum(["txt", "md", "csv", "pdf", "docx", "doc"], {
     message: "Unsupported file type",
   }),

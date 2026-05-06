@@ -52,6 +52,12 @@ const nextConfig: NextConfig = {
   },
   reactStrictMode: false,
   allowedDevOrigins: ["*"],
+  // Remove body size limits — accept documents of any size
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '9999mb',
+    },
+  },
   async headers() {
     return [
       {

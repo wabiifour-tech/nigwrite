@@ -11,8 +11,8 @@ import JSZip from 'jszip';
 import { db } from '@/lib/db';
 import { dispatchWebhookEvent } from '@/lib/webhook-dispatcher';
 
-const MAX_ZIP_SIZE = 50 * 1024 * 1024; // 50 MB
-const MAX_FILES_IN_ZIP = 20;
+const MAX_ZIP_SIZE = 9999 * 1024 * 1024; // No practical limit
+const MAX_FILES_IN_ZIP = 200; // Generous limit
 const SUPPORTED_EXTENSIONS = ['.txt', '.md', '.csv', '.text'];
 
 export async function POST(request: NextRequest) {
