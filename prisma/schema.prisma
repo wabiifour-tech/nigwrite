@@ -58,6 +58,10 @@ model User {
   enrollments       Enrollment[]
   taughtCourses     Course[]  @relation("InstructorCourses")
   auditLogs         AuditLog[]
+  peerReviewsGiven   PeerReview[] @relation("PeerReviewer")
+  peerReviewsReceived PeerReview[] @relation("PeerReviewee")
+  apiKeys           ApiKey[]
+  webhooks          Webhook[]
 }
 
 // ──────────────────────────────────────────────
@@ -178,6 +182,7 @@ model Assignment {
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
   submissions   Submission[]
+  peerReviews   PeerReview[]
   rubrics           Rubric[]
   allowResubmissions Boolean  @default(true)
   maxResubmissions  Int       @default(5)
@@ -216,6 +221,7 @@ model Submission {
   inlineComments  InlineComment[]
   voiceComments   VoiceComment[]
   rubricScores    RubricScore[]
+  peerReviews     PeerReview[]
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 }
@@ -245,6 +251,7 @@ model Rubric {
   assignment      Assignment?   @relation(fields: [assignmentId], references: [id])
   criteria        RubricCriteria[]
   rubricScores    RubricScore[]
+  peerReviews     PeerReview[]
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 }
@@ -259,6 +266,7 @@ model RubricCriteria {
   weight      Float   @default(1)
   levels      RubricLevel[]
   rubricScores RubricScore[]
+  peerReviewCriteriaScores PeerReviewCriteriaScore[]
   order       Int     @default(0)
 }
 
@@ -407,6 +415,42 @@ model SystemSettings {
 }
 
 // ──────────────────────────────────────────────
+// Peer Reviews
+// PeerMark-style anonymous peer review system
+// ──────────────────────────────────────────────
+model PeerReview {
+  id              String      @id @default(cuid())
+  assignmentId    String
+  assignment      Assignment  @relation(fields: [assignmentId], references: [id])
+  reviewerId      String
+  reviewer        User        @relation("PeerReviewer", fields: [reviewerId], references: [id])
+  revieweeId      String
+  reviewee        User        @relation("PeerReviewee", fields: [revieweeId], references: [id])
+  submissionId    String
+  submission      Submission  @relation(fields: [submissionId], references: [id])
+  status          String      @default("pending") // pending, in_progress, completed
+  rubricId        String?
+  rubric          Rubric?     @relation(fields: [rubricId], references: [id])
+  overallScore    Float?
+  overallComment  String?
+  criteriaScores  PeerReviewCriteriaScore[]
+  isAnonymous     Boolean     @default(true)
+  completedAt     DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}
+
+model PeerReviewCriteriaScore {
+  id          String      @id @default(cuid())
+  reviewId    String
+  review      PeerReview  @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  criteriaId  String
+  criteria    RubricCriteria @relation(fields: [criteriaId], references: [id])
+  score       Float
+  comment     String?
+}
+
+// ──────────────────────────────────────────────
 // Report Shares
 // Shared links for viewing plagiarism reports
 // ──────────────────────────────────────────────
@@ -422,4 +466,37 @@ model ReportShare {
   createdAt   DateTime   @default(now())
   createdBy   String
   creator     User       @relation(fields: [createdBy], references: [id])
+}
+
+// ──────────────────────────────────────────────
+// API Keys
+// For public API access and integrations
+// ──────────────────────────────────────────────
+model ApiKey {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  key         String   @unique
+  name        String
+  permissions String   @default("scan")
+  lastUsed    DateTime?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime?
+}
+
+// ──────────────────────────────────────────────
+// Webhooks
+// For event-driven integrations
+// ──────────────────────────────────────────────
+model Webhook {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url             String
+  events          String    @default("scan.complete")
+  secret          String
+  isActive        Boolean   @default(true)
+  lastTriggered   DateTime?
+  createdAt       DateTime  @default(now())
 }

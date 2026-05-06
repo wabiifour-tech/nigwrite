@@ -41,9 +41,11 @@ import {
   GitCompare,
   Columns,
   ChevronRight,
+  Fingerprint,
 } from 'lucide-react';
+import { AuthorshipReport } from '@/components/authorship/AuthorshipReport';
 import { SideBySideComparison, type SourceBreakdown as SBS_SourceBreakdown, type MatchRegion as SBS_MatchRegion } from '@/components/SideBySideComparison';
-import { PostScanExclusions, type ExclusionSettingsData, type RescoreResult, type SourceInfo, DEFAULT_EXCLUSION_SETTINGS as POST_DEFAULT } from '@/components/PostScanExclusions';
+import { PostScanExclusions, type ExclusionSettingsData, type RescoreResult, type SourceInfo } from '@/components/PostScanExclusions';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -1119,14 +1121,21 @@ export function PlagiarismReport({ report, documentContent, onReportUpdate }: Pl
   return (
     <div className="space-y-6">
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="w-full grid grid-cols-2">
+        <TabsList className="w-full grid grid-cols-3">
           <TabsTrigger value="originality" className="gap-1.5">
             <FileText className="h-3.5 w-3.5" />
-            Originality
+            <span className="hidden sm:inline">Originality</span>
+            <span className="sm:hidden">Original</span>
+          </TabsTrigger>
+          <TabsTrigger value="authorship" className="gap-1.5">
+            <Fingerprint className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Authorship</span>
+            <span className="sm:hidden">Author</span>
           </TabsTrigger>
           <TabsTrigger value="comparison" className="gap-1.5">
             <Columns className="h-3.5 w-3.5" />
-            Comparison
+            <span className="hidden sm:inline">Comparison</span>
+            <span className="sm:hidden">Compare</span>
           </TabsTrigger>
         </TabsList>
 
@@ -1316,6 +1325,10 @@ export function PlagiarismReport({ report, documentContent, onReportUpdate }: Pl
       </Card>
 
       {/* ── Comparison Tab Content ── */}
+        </TabsContent>
+
+        <TabsContent value="authorship" className="mt-6">
+          <AuthorshipReport documentContent={documentContent} />
         </TabsContent>
 
         <TabsContent value="comparison" className="mt-6">

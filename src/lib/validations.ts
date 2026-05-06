@@ -107,6 +107,21 @@ export const unshareSchema = z.object({
 });
 
 /**
+ * Schema for /api/revision POST
+ */
+export const revisionSchema = z.object({
+  text: z
+    .string()
+    .min(20, "Text must be at least 20 characters for revision analysis")
+    .max(500_000, "Text must be 500,000 characters or less"),
+  title: z
+    .string()
+    .max(200, "Title must be 200 characters or less")
+    .optional(),
+  useAI: z.boolean().optional().default(false),
+});
+
+/**
  * Helper: format Zod validation errors into a flat array of messages.
  */
 export function formatValidationErrors(

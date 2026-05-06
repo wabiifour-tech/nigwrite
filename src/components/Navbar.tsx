@@ -9,7 +9,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { PenTool, Upload, LayoutDashboard, FileText, Info, Bell, X, Check, Shield, GraduationCap, BookOpen, User, Sparkles, ClipboardList } from 'lucide-react';
+import { PenTool, Upload, LayoutDashboard, FileText, Info, Bell, X, Check, Shield, GraduationCap, BookOpen, User, Sparkles, ClipboardList, Users } from 'lucide-react';
 
 interface NavbarProps {
   currentView: string;
@@ -20,6 +20,7 @@ const studentNavItems = [
   { id: 'student-dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'scan', label: 'Scan', icon: FileText },
   { id: 'selfcheck', label: 'Self-Check', icon: Sparkles },
+  { id: 'peer-review', label: 'Peer Review', icon: Users },
   { id: 'courses', label: 'Courses', icon: BookOpen },
   { id: 'history', label: 'History', icon: ClipboardList },
   { id: 'profile', label: 'Profile', icon: User },
@@ -141,7 +142,7 @@ export function Navbar({ currentView, onViewChange }: NavbarProps) {
 
           {/* Desktop Navigation */}
           <nav className="hidden md:flex items-center gap-1">
-            {(currentView === 'student-dashboard' || currentView === 'history' || currentView === 'courses' || currentView === 'profile' || currentView === 'selfcheck' || currentView === 'receipt'
+            {(currentView === 'student-dashboard' || currentView === 'history' || currentView === 'courses' || currentView === 'profile' || currentView === 'selfcheck' || currentView === 'receipt' || currentView === 'peer-review'
               ? studentNavItems
               : navItems
             ).map((item) => {
@@ -263,7 +264,7 @@ export function Navbar({ currentView, onViewChange }: NavbarProps) {
       {/* Mobile Navigation */}
       <div className="md:hidden border-t">
         <div className="flex overflow-x-auto px-2 py-1 gap-1">
-          {(currentView === 'student-dashboard' || currentView === 'history' || currentView === 'courses' || currentView === 'profile' || currentView === 'selfcheck' || currentView === 'receipt'
+          {(currentView === 'student-dashboard' || currentView === 'history' || currentView === 'courses' || currentView === 'profile' || currentView === 'selfcheck' || currentView === 'receipt' || currentView === 'peer-review'
             ? studentNavItems
             : navItems
           ).map((item) => {

@@ -332,3 +332,52 @@ Stage Summary:
 - Re-score API: POST /api/rescore with exclusionSettings, excludedSourceIds, sourceTypeExclusions; uses persistent fingerprint store (no web search for speed)
 - Full backward compatibility maintained
 - Lint: 0 new errors introduced
+
+---
+Task ID: 2d
+Agent: Super Z (Main)
+Task: Build Authorship Investigation system for NigWrite that analyzes writing style
+
+Work Log:
+- Read worklog.md and analyzed existing codebase (PlagiarismReport.tsx, page.tsx, prisma schema, validations, db)
+- Created `/home/z/my-project/src/lib/authorship-analyzer.ts`:
+  - Defined `WritingProfile` interface with 9 linguistic features: avgSentenceLength, avgWordLength, vocabularyRichness (type-token ratio), sentenceLengthVariance, paragraphLengthAvg, transitionWordFrequency, passiveVoiceFrequency, punctuationPatterns (8 categories), topWords (20)
+  - Defined `AuthorshipResult` interface with profile, consistencyScore (0-100), anomalyScore (0-100), anomalies[], comparisonWithHistory?
+  - Implemented text preprocessing: splitSentences (preserving abbreviations), splitParagraphs, getWords
+  - Implemented 9 feature extraction functions with robust edge-case handling
+  - Built 100+ transition words set and 14 passive voice regex patterns
+  - Built 120+ stop words set for filtering characteristic vocabulary
+  - Implemented `analyzeConsistency()`: vocabulary shift detection (Jaccard similarity between first/second halves), sentence complexity transition analysis, passive voice/punctuation extreme detection
+  - Implemented `compareWithHistory()`: weighted multi-metric comparison (7 features + top word overlap + punctuation), per-metric threshold-based similarity scoring, generates human-readable difference descriptions
+  - Implemented main `analyzeAuthorship()` function: validates input, extracts features, runs consistency check, optionally compares with history, computes combined anomaly score (40% internal + 60% historical)
+- Created `/home/z/my-project/src/app/api/authorship/route.ts`:
+  - POST endpoint with Zod validation (text: 50-500k chars, optional userId)
+  - Fetches user's last 10 documents from DB to build historical profiles
+  - In-memory profile cache per userId (up to 20 profiles)
+  - Caches new profiles after successful analysis
+  - Returns AuthorshipResult with success/error envelope
+  - Fixed Document model field name (contentBody, not content)
+- Created `/home/z/my-project/src/components/authorship/AuthorshipReport.tsx`:
+  - AuthorshipGauge: SVG circular gauge with 4-tier verdict system (≥75%: "Likely same author", ≥55%: "Possibly same author", ≥35%: "Possible different author", <35%: "Likely different author"), color-coded verdict banner with UserCheck/UserX icons
+  - MetricBar: 7 writing profile metrics visualized as labeled bar charts (avg sentence/word length, vocabulary richness, sentence complexity, paragraph length, transition words, passive voice) with descriptions
+  - PunctuationChart: 8-category grid showing punctuation usage per 1000 words with mini bars
+  - TopWordsDisplay: Badge cloud showing top 15 characteristic vocabulary words
+  - AnomalyAlerts: Red-bordered alert cards with numbered badges for each detected anomaly; green "no anomalies" state
+  - HistoricalComparison: Match score bar with 4-tier color coding, key differences list, consistent/inconsistent verdict
+  - Main AuthorshipReport: auto-triggers analysis on mount when content ≥50 chars, loading/error/empty states, summary stats row (consistency, anomaly score, characteristic words count, anomalies count), 2-column responsive layout (metrics left, anomalies right), historical comparison card, re-analyze button
+- Integrated into PlagiarismReport.tsx:
+  - Added Fingerprint icon import and AuthorshipReport component import
+  - Changed TabsList from grid-cols-2 to grid-cols-3
+  - Added "Authorship" tab trigger with Fingerprint icon between "Originality" and "Comparison"
+  - Added TabsContent for "authorship" value rendering AuthorshipReport with documentContent
+  - Responsive tab labels: full text on sm+, abbreviated on mobile
+- Verified: 0 TypeScript errors in new files, 0 ESLint errors in new files, dev server running clean
+
+Stage Summary:
+- 3 new files created (authorship-analyzer.ts, authorship/route.ts, AuthorshipReport.tsx)
+- 1 existing file modified (PlagiarismReport.tsx)
+- Writing analysis features: 9 linguistic metrics, 100+ transition words, 14 passive voice patterns, vocabulary shift detection, sentence complexity analysis
+- Historical comparison: weighted 7-metric scoring with top word overlap, per-user cached profiles
+- UI: circular gauge, 7 metric bars, punctuation grid, vocabulary badges, anomaly alerts, historical comparison card
+- Tab integration: "Authorship" tab now available alongside "Originality" and "Comparison" in report view
+- TypeScript: 0 new errors; ESLint: 0 new errors

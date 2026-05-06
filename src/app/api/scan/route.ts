@@ -14,8 +14,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { WinnowingEngine, type CorpusMatchEntry, type ExclusionSettings, DEFAULT_EXCLUSION_SETTINGS } from '@/lib/winnowing-engine';
 import { AIDetector } from '@/lib/ai-detector';
+import { checkGrammar } from '@/lib/grammar-checker';
 import { getPersistentFingerprintStore, type FingerprintEntry } from '@/lib/persistent-fingerprint-store';
 import { db } from '@/lib/db';
+import { dispatchWebhookEvent } from '@/lib/webhook-dispatcher';
 import ZAI from 'z-ai-web-dev-sdk';
 
 // ═══════════════════════════════════════════════════════════════
@@ -432,6 +434,9 @@ async function runScanPipeline(
   const aiResult = aiDetector.analyzeText(content);
   const aiSentences = aiDetector.analyzeBySentence(content);
 
+  // ── Stage 5.5: Grammar & Mechanics Check ──
+  const grammarResult = checkGrammar(content);
+
   // ── Stage 6: Save to Database ──
   const document = await db.document.create({
     data: {
@@ -573,6 +578,15 @@ async function runScanPipeline(
       })),
     },
     verdict: getOverallVerdict(scanResult.overallSimilarity, aiResult.aiProbability),
+    grammar: {
+      score: grammarResult.score,
+      totalIssues: grammarResult.statistics.totalIssues,
+      errors: grammarResult.statistics.errors,
+      warnings: grammarResult.statistics.warnings,
+      info: grammarResult.statistics.info,
+      issues: grammarResult.issues,
+      categories: grammarResult.statistics.categories,
+    },
   };
 }
 
@@ -600,6 +614,18 @@ export async function POST(request: NextRequest) {
       userId,
       exclusionSettings,
     );
+
+    // Dispatch webhook event in background (non-blocking)
+    if (userId) {
+      dispatchWebhookEvent(userId, 'scan.complete', {
+        reportId: resultData.reportId,
+        documentId: resultData.documentId,
+        title: resultData.title,
+        similarityScore: resultData.plagiarism.similarityScore,
+        aiScore: resultData.aiDetection.aiProbability,
+        verdict: resultData.verdict.status,
+      });
+    }
 
     return NextResponse.json({
       success: true,

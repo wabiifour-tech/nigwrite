@@ -53,6 +53,12 @@ import { VersionHistory } from '@/components/VersionHistory';
 import { VersionDiffViewer } from '@/components/VersionDiffViewer';
 import { ShareReportDialog } from '@/components/ShareReportDialog';
 import { StudentSubmissionHistory } from '@/components/StudentSubmissionHistory';
+import { GrammarReport, type GrammarResult } from '@/components/grammar/GrammarReport';
+import { RevisionAssistant } from '@/components/revision/RevisionAssistant';
+import { DeveloperToolsPanel } from '@/components/DeveloperToolsPanel';
+import { PeerReviewDashboard } from '@/components/peer-review/PeerReviewDashboard';
+import { PeerReviewForm } from '@/components/peer-review/PeerReviewForm';
+import { PeerReviewResults } from '@/components/peer-review/PeerReviewResults';
 import {
   Upload,
   Search,
@@ -89,6 +95,10 @@ import {
   ListChecks,
   GitBranch,
   History,
+  Users as UsersIcon,
+  UserCheck,
+  Lightbulb,
+  PenLine,
 } from 'lucide-react';
 
 // ──────────────────────────────────────────────
@@ -149,6 +159,23 @@ interface ScanReportData {
     label: string;
     description: string;
     color: string;
+  };
+  grammar?: {
+    score: number;
+    totalIssues: number;
+    errors: number;
+    warnings: number;
+    info: number;
+    issues: Array<{
+      type: 'grammar' | 'spelling' | 'style' | 'mechanics';
+      category: string;
+      message: string;
+      suggestion: string;
+      position: { start: number; end: number };
+      originalText: string;
+      severity: 'error' | 'warning' | 'info';
+    }>;
+    categories: { category: string; count: number }[];
   };
 }
 
@@ -310,8 +337,21 @@ export default function NigWriteApp() {
   const [exclusionSettings, setExclusionSettings] = useState<ExclusionSettings>(DEFAULT_EXCLUSION_SETTINGS);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
+  // Scan mode: 'scan' for plagiarism/AI detection, 'feedback' for revision assistant
+  const [scanMode, setScanMode] = useState<'scan' | 'feedback'>('scan');
+
   // Admin view state
   const [adminTab, setAdminTab] = useState('dashboard');
+
+  // Instructor peer review state
+  const [instructorTab, setInstructorTab] = useState('assignments');
+  const [peerReviewFormId, setPeerReviewFormId] = useState<string | null>(null);
+  const [showPeerReviewSetup, setShowPeerReviewSetup] = useState(false);
+  const [prSetupAssignmentId, setPrSetupAssignmentId] = useState('');
+  const [prSetupRubricId, setPrSetupRubricId] = useState('');
+  const [prSetupAnonymous, setPrSetupAnonymous] = useState(true);
+  const [prSetupLoading, setPrSetupLoading] = useState(false);
+  const [rubrics, setRubrics] = useState<Array<{ id: string; title: string }>>([]);
 
   // Load exclusion settings from localStorage on mount
   useEffect(() => {
@@ -952,8 +992,34 @@ export default function NigWriteApp() {
           </p>
         </div>
 
+        {/* Mode Toggle: Plagiarism Scan vs Writing Feedback */}
+        <div className="flex items-center gap-1 p-1 bg-muted rounded-lg w-fit mx-auto">
+          <button
+            onClick={() => setScanMode('scan')}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              scanMode === 'scan'
+                ? 'bg-background shadow-sm text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Search className="h-3.5 w-3.5" />
+            Plagiarism Scan
+          </button>
+          <button
+            onClick={() => setScanMode('feedback')}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              scanMode === 'feedback'
+                ? 'bg-background shadow-sm text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Lightbulb className="h-3.5 w-3.5" />
+            Writing Feedback
+          </button>
+        </div>
+
         {/* File Upload Zone — supports multiple files */}
-        <Card>
+        <Card className={scanMode === 'feedback' ? 'opacity-50 pointer-events-none' : ''}>
           <CardContent className="pt-6">
             <input
               ref={fileInputRef}
@@ -1012,7 +1078,7 @@ export default function NigWriteApp() {
         </Card>
 
         {/* Batch Progress */}
-        {hasBatchFiles && (
+        {hasBatchFiles && scanMode === 'scan' && (
           <Card>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
@@ -1058,7 +1124,8 @@ export default function NigWriteApp() {
         )}
 
         {/* Advanced Settings Panel */}
-        <Card className="overflow-hidden">
+        {scanMode === 'scan' && (
+          <Card className="overflow-hidden">
           <button
             onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
             className="w-full flex items-center justify-between p-4 text-left hover:bg-muted/30 transition-colors"
@@ -1157,6 +1224,7 @@ export default function NigWriteApp() {
             </div>
           )}
         </Card>
+        )}
 
         {/* Text Input (single scan) */}
         <Card>
@@ -1218,6 +1286,7 @@ export default function NigWriteApp() {
             )}
 
             <div className="flex flex-col sm:flex-row gap-3">
+              {scanMode === 'scan' && (
               <Button
                 onClick={handleScan}
                 disabled={isScanning || scanContent.trim().length === 0}
@@ -1236,6 +1305,7 @@ export default function NigWriteApp() {
                   </>
                 )}
               </Button>
+              )}
               <Button
                 variant="outline"
                 onClick={clearAll}
@@ -1248,6 +1318,15 @@ export default function NigWriteApp() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Revision Assistant — shown in Writing Feedback mode */}
+        {scanMode === 'feedback' && (
+          <Card>
+            <CardContent className="pt-6">
+              <RevisionAssistant text={scanContent} title={scanTitle || undefined} />
+            </CardContent>
+          </Card>
+        )}
       </div>
     );
   };
@@ -1294,6 +1373,14 @@ export default function NigWriteApp() {
           </div>
         </div>
         <PlagiarismReport report={reportData} documentContent={scanContent} />
+
+        {/* Grammar & Mechanics Check */}
+        {reportData.grammar && (
+          <GrammarReport
+            grammarResult={reportData.grammar as unknown as GrammarResult}
+            documentContent={scanContent}
+          />
+        )}
       </div>
     );
   };
@@ -1563,12 +1650,91 @@ export default function NigWriteApp() {
   );
 
   // ──────────────────────────────────────────────
+  // Fetch rubrics for peer review setup
+  // ──────────────────────────────────────────────
+  const loadRubrics = useCallback(async () => {
+    try {
+      const res = await fetch('/api/rubrics');
+      const result = await res.json();
+      if (result.success) {
+        setRubrics(result.data.map((r: { id: string; title: string }) => ({ id: r.id, title: r.title })));
+      }
+    } catch { /* empty */ }
+  }, []);
+
+  useEffect(() => {
+    loadRubrics();
+  }, [loadRubrics]);
+
+  const handlePeerReviewSetup = useCallback(async () => {
+    if (!prSetupAssignmentId) return;
+    setPrSetupLoading(true);
+    try {
+      // Fetch submissions for this assignment to get student IDs
+      const subsRes = await fetch(`/api/submissions?assignmentId=${prSetupAssignmentId}`);
+      const subsResult = await subsRes.json();
+      if (!subsResult.success || subsResult.data.length === 0) {
+        alert('No submissions found for this assignment. Students must submit first.');
+        setPrSetupLoading(false);
+        return;
+      }
+
+      const studentIds = [...new Set(
+        subsResult.data
+          .map((s: { studentId: string | null }) => s.studentId)
+          .filter(Boolean) as string[]
+      )];
+
+      if (studentIds.length < 2) {
+        alert('At least 2 students need to have submitted to create peer review pairings.');
+        setPrSetupLoading(false);
+        return;
+      }
+
+      const res = await fetch('/api/peer-reviews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assignmentId: prSetupAssignmentId,
+          reviewerIds: studentIds,
+          revieweeIds: studentIds,
+          rubricId: prSetupRubricId || undefined,
+          isAnonymous: prSetupAnonymous,
+        }),
+      });
+
+      const result = await res.json();
+      if (result.success) {
+        setShowPeerReviewSetup(false);
+        setPrSetupAssignmentId('');
+        setPrSetupRubricId('');
+        // Refresh reviews
+      } else {
+        alert(result.error || 'Failed to create peer reviews');
+      }
+    } catch {
+      alert('Network error. Please try again.');
+    } finally {
+      setPrSetupLoading(false);
+    }
+  }, [prSetupAssignmentId, prSetupRubricId, prSetupAnonymous]);
+
+  const handlePeerReviewAction = useCallback((reviewId: string, action: 'start' | 'continue' | 'view') => {
+    setPeerReviewFormId(reviewId);
+  }, []);
+
+  // ──────────────────────────────────────────────
   // View: Instructor Dashboard
   // ──────────────────────────────────────────────
   const renderInstructor = () => {
     if (!assignmentsLoaded) {
       loadAssignments();
     }
+
+    const instructorTabs = [
+      { id: 'assignments', label: 'Assignments', icon: BookOpen },
+      { id: 'peer-review', label: 'Peer Review', icon: UsersIcon },
+    ];
 
     return (
       <div className="max-w-5xl mx-auto py-8 px-4 space-y-6">
@@ -1581,14 +1747,58 @@ export default function NigWriteApp() {
             <p className="text-muted-foreground">Manage assignments and review submissions</p>
           </div>
           <Button
-            onClick={() => setShowCreateForm(!showCreateForm)}
+            onClick={() => {
+              if (instructorTab === 'peer-review') {
+                setShowPeerReviewSetup(!showPeerReviewSetup);
+              } else {
+                setShowCreateForm(!showCreateForm);
+              }
+            }}
             className="gap-2 bg-[#008751] hover:bg-[#006b40]"
           >
-            {showCreateForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-            {showCreateForm ? 'Cancel' : 'Create Assignment'}
+            {instructorTab === 'peer-review' ? (
+              <>
+                {showPeerReviewSetup ? <X className="h-4 w-4" /> : <UserCheck className="h-4 w-4" />}
+                {showPeerReviewSetup ? 'Cancel' : 'Setup Peer Review'}
+              </>
+            ) : (
+              <>
+                {showCreateForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                {showCreateForm ? 'Cancel' : 'Create Assignment'}
+              </>
+            )}
           </Button>
         </div>
 
+        {/* Instructor Tabs */}
+        <div className="flex overflow-x-auto gap-1 border-b pb-0">
+          {instructorTabs.map(tab => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => {
+                  setInstructorTab(tab.id);
+                  setShowCreateForm(false);
+                  setShowPeerReviewSetup(false);
+                  setPeerReviewFormId(null);
+                }}
+                className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors border-b-2 -mb-px flex items-center gap-1.5 ${
+                  instructorTab === tab.id
+                    ? 'border-[#008751] text-[#008751]'
+                    : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground'
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Assignments Tab */}
+        {instructorTab === 'assignments' && (
+          <>
         {/* Create Assignment Form */}
         {showCreateForm && (
           <Card className="border-[#008751]/20">
@@ -1818,6 +2028,100 @@ export default function NigWriteApp() {
               );
             })}
           </div>
+        )}
+        </>
+        )}
+
+        {/* Peer Review Tab */}
+        {instructorTab === 'peer-review' && (
+          <>
+            {/* Peer Review Setup Form */}
+            {showPeerReviewSetup && (
+              <Card className="border-[#008751]/20">
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <UserCheck className="h-5 w-5 text-[#008751]" />
+                    Setup Peer Review
+                  </CardTitle>
+                  <CardDescription>
+                    Create anonymous peer review assignments. Each student will review submissions from other students.
+                    Reviews are automatically distributed to prevent self-review.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="pr-assignment">Assignment</Label>
+                    <select
+                      id="pr-assignment"
+                      value={prSetupAssignmentId}
+                      onChange={(e) => setPrSetupAssignmentId(e.target.value)}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    >
+                      <option value="">Select an assignment...</option>
+                      {assignments.map(a => (
+                        <option key={a.id} value={a.id}>{a.title} ({a._count.submissions} submissions)</option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground">
+                      Only assignments with submissions are shown. Students must submit before peer reviews can be assigned.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="pr-rubric">Grading Rubric (optional)</Label>
+                    <select
+                      id="pr-rubric"
+                      value={prSetupRubricId}
+                      onChange={(e) => setPrSetupRubricId(e.target.value)}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    >
+                      <option value="">No rubric (free-form scoring)</option>
+                      {rubrics.map(r => (
+                        <option key={r.id} value={r.id}>{r.title}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <Switch
+                      id="pr-anonymous"
+                      checked={prSetupAnonymous}
+                      onCheckedChange={setPrSetupAnonymous}
+                    />
+                    <Label htmlFor="pr-anonymous" className="text-sm">
+                      Anonymous reviews (reviewer identities hidden from reviewees)
+                    </Label>
+                  </div>
+
+                  <Button
+                    onClick={handlePeerReviewSetup}
+                    disabled={!prSetupAssignmentId || prSetupLoading}
+                    className="gap-2 bg-[#008751] hover:bg-[#006b40]"
+                  >
+                    {prSetupLoading ? (
+                      <><Loader2 className="h-4 w-4 animate-spin" /> Creating...</>
+                    ) : (
+                      <><UserCheck className="h-4 w-4" /> Create Peer Review Assignments</>
+                    )}
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* If a specific review form is open */}
+            {peerReviewFormId ? (
+              <PeerReviewForm
+                reviewId={peerReviewFormId}
+                onClose={() => setPeerReviewFormId(null)}
+                onSubmit={() => setPeerReviewFormId(null)}
+              />
+            ) : (
+              <PeerReviewDashboard
+                mode="instructor"
+                onReviewAction={handlePeerReviewAction}
+              />
+            )}
+          </>
         )}
       </div>
     );
@@ -2220,6 +2524,9 @@ export default function NigWriteApp() {
     loadUser();
   }, []);
 
+  // Student peer review state
+  const [studentPrFormId, setStudentPrFormId] = useState<string | null>(null);
+
   const renderStudentDashboard = () => (
     <StudentDashboard userName={userName} onViewChange={handleViewChange} />
   );
@@ -2231,6 +2538,57 @@ export default function NigWriteApp() {
   const renderStudentCourses = () => <StudentCourses />;
 
   const renderStudentProfile = () => <StudentProfile />;
+
+  const renderStudentPeerReview = () => {
+    if (studentPrFormId) {
+      return (
+        <div className="max-w-4xl mx-auto py-8 px-4">
+          <PeerReviewForm
+            reviewId={studentPrFormId}
+            onClose={() => setStudentPrFormId(null)}
+            onSubmit={() => setStudentPrFormId(null)}
+          />
+        </div>
+      );
+    }
+
+    return (
+      <div className="max-w-5xl mx-auto py-8 px-4 space-y-6">
+        <div>
+          <h2 className="text-2xl font-bold flex items-center gap-2">
+            <UsersIcon className="h-6 w-6 text-[#008751]" />
+            Peer Review
+          </h2>
+          <p className="text-muted-foreground">Review your peers&apos; submissions and see feedback on your own work</p>
+        </div>
+
+        {/* Tabs for given vs received */}
+        <div className="flex overflow-x-auto gap-1 border-b pb-0">
+          <button
+            onClick={() => { setStudentPrFormId(null); }}
+            className="px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors border-b-2 -mb-px border-[#008751] text-[#008751]"
+          >
+            Reviews to Complete
+          </button>
+          <button
+            className="px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors border-b-2 -mb-px border-transparent text-muted-foreground hover:text-foreground"
+          >
+            Reviews Received
+          </button>
+        </div>
+
+        <PeerReviewDashboard
+          mode="given"
+          onReviewAction={(reviewId) => setStudentPrFormId(reviewId)}
+        />
+
+        {/* Reviews Received Section */}
+        <div className="pt-6">
+          <PeerReviewResults title="Reviews Received on Your Submissions" />
+        </div>
+      </div>
+    );
+  };
 
   const renderSelfCheck = () => (
     <SelfCheck
@@ -2282,10 +2640,12 @@ export default function NigWriteApp() {
       case 'courses': return renderStudentCourses();
       case 'profile': return renderStudentProfile();
       case 'selfcheck': return renderSelfCheck();
+      case 'peer-review': return renderStudentPeerReview();
       case 'receipt': return renderReceiptView();
       case 'student-history': return renderStudentSubmissionHistory();
       case 'version-diff': return renderVersionDiff();
       case 'resubmit': return renderResubmitDialogView();
+      case 'dev-tools': return <DeveloperToolsPanel />;
       default: return renderHome();
     }
   };
