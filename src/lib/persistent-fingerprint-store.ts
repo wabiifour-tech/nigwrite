@@ -4,7 +4,7 @@
  * Seeds the corpus from the original hardcoded documents on first init.
  */
 
-import { PrismaClient } from '@prisma/client';
+import { db } from './db';
 import { WinnowingEngine } from './winnowing-engine';
 import { CORPUS_DOCUMENTS } from './corpus-data';
 
@@ -46,13 +46,8 @@ function getSourceType(id: string): 'publication' | 'internet' | 'student_paper'
 }
 
 class PersistentFingerprintStore {
-  private prisma: PrismaClient;
   private initialized: boolean = false;
   private initPromise: Promise<void> | null = null;
-
-  constructor() {
-    this.prisma = new PrismaClient();
-  }
 
   /**
    * Initialize: seed the corpus if not already seeded.
@@ -76,7 +71,7 @@ class PersistentFingerprintStore {
   private async _initialize(): Promise<void> {
     try {
       // Check if corpus documents exist
-      const count = await this.prisma.sourceDocument.count({
+      const count = await db.sourceDocument.count({
         where: { isUserDocument: false },
       });
 
@@ -109,7 +104,7 @@ class PersistentFingerprintStore {
           const sourceType = getSourceType(doc.id);
 
           // Create the SourceDocument record
-          const sourceDocument = await this.prisma.sourceDocument.create({
+          const sourceDocument = await db.sourceDocument.create({
             data: {
               externalId: doc.id,
               title: doc.title,
@@ -129,7 +124,7 @@ class PersistentFingerprintStore {
             const fpBatchSize = 500;
             for (let j = 0; j < fingerprints.length; j += fpBatchSize) {
               const fpBatch = fingerprints.slice(j, j + fpBatchSize);
-              await this.prisma.fingerprint.createMany({
+              await db.fingerprint.createMany({
                 data: fpBatch.map(fp => ({
                   hashValue: fp.hash,
                   documentId: sourceDocument.id,
@@ -161,7 +156,7 @@ class PersistentFingerprintStore {
     for (let i = 0; i < hashes.length; i += batchSize) {
       const batch = hashes.slice(i, i + batchSize);
 
-      const fingerprints = await this.prisma.fingerprint.findMany({
+      const fingerprints = await db.fingerprint.findMany({
         where: {
           hashValue: { in: batch },
         },
@@ -202,14 +197,14 @@ class PersistentFingerprintStore {
   ): Promise<void> {
     try {
       // Check if already exists by externalId
-      const existing = await this.prisma.sourceDocument.findUnique({
+      const existing = await db.sourceDocument.findUnique({
         where: { externalId: documentId },
       });
 
       if (existing) return; // Already indexed
 
       // Create SourceDocument
-      const sourceDocument = await this.prisma.sourceDocument.create({
+      const sourceDocument = await db.sourceDocument.create({
         data: {
           externalId: documentId,
           title,
@@ -228,7 +223,7 @@ class PersistentFingerprintStore {
         const fpBatchSize = 500;
         for (let i = 0; i < fingerprints.length; i += fpBatchSize) {
           const fpBatch = fingerprints.slice(i, i + fpBatchSize);
-          await this.prisma.fingerprint.createMany({
+          await db.fingerprint.createMany({
             data: fpBatch.map(fp => ({
               hashValue: fp.hash,
               documentId: sourceDocument.id,
@@ -247,7 +242,7 @@ class PersistentFingerprintStore {
    * Get the count of user-submitted documents.
    */
   async getUserDocumentCount(): Promise<number> {
-    return this.prisma.sourceDocument.count({
+    return db.sourceDocument.count({
       where: { isUserDocument: true },
     });
   }
@@ -263,7 +258,7 @@ class PersistentFingerprintStore {
     for (let i = 0; i < hashes.length; i += batchSize) {
       const batch = hashes.slice(i, i + batchSize);
 
-      const fingerprints = await this.prisma.fingerprint.findMany({
+      const fingerprints = await db.fingerprint.findMany({
         where: {
           hashValue: { in: batch },
           document: { isUserDocument: true },
@@ -297,14 +292,14 @@ class PersistentFingerprintStore {
    * Get total corpus fingerprint count (for stats).
    */
   async getTotalFingerprintCount(): Promise<number> {
-    return this.prisma.fingerprint.count();
+    return db.fingerprint.count();
   }
 
   /**
    * Get total source document count.
    */
   async getTotalDocumentCount(): Promise<number> {
-    return this.prisma.sourceDocument.count();
+    return db.sourceDocument.count();
   }
 }
 
