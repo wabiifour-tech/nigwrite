@@ -46,7 +46,7 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
-  output: "standalone",
+  // Vercel handles output mode automatically — do NOT use "standalone"
   typescript: {
     ignoreBuildErrors: false,
   },
@@ -60,7 +60,7 @@ const nextConfig: NextConfig = {
     // Allow unlimited body size for API route handlers (file uploads)
     proxyClientMaxBodySize: '9999mb',
   },
-  serverExternalPackages: ['mammoth', 'pdf-parse'],
+  serverExternalPackages: ['mammoth', 'pdf-parse', '@prisma/client'],
   async headers() {
     return [
       {

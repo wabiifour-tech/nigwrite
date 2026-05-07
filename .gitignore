@@ -53,3 +53,4 @@ server.log
 # Skills directory
 /skills/node_modules/
 skills/
+.vercel
