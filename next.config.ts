@@ -60,7 +60,7 @@ const nextConfig: NextConfig = {
     // Allow unlimited body size for API route handlers (file uploads)
     proxyClientMaxBodySize: '9999mb',
   },
-  serverExternalPackages: ['mammoth', 'pdf-parse', '@prisma/client'],
+  serverExternalPackages: ['mammoth', 'pdf-parse', '@prisma/client', '@libsql/client'],
   async headers() {
     return [
       {
